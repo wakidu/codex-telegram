@@ -94,6 +94,9 @@ builder.Services.PostConfigure<CodexClientOptions>(options =>
 
 builder.Services.PostConfigure<CodexTelegramOptions>(options =>
 {
+    CodexTelegramOptionMigrations.ApplyRootLevelTailscaleFallback(options, builder.Configuration);
+    options.Tailscale.ConfigurationSourcePath = localSettingsPath;
+
     if (string.IsNullOrWhiteSpace(options.Workspace.DataRoot))
     {
         options.Workspace.DataRoot = GetDefaultDataRoot();
@@ -215,6 +218,10 @@ builder.Services.AddSingleton<ICodexThreadManifestStore>(sp => sp.GetRequiredSer
 builder.Services.AddSingleton<CodexProjectCatalogStore>();
 builder.Services.AddSingleton<ICodexProjectCatalogStore>(sp => sp.GetRequiredService<CodexProjectCatalogStore>());
 builder.Services.AddSingleton<CodexWorkspaceBrowser>();
+builder.Services.AddSingleton<DevUtilityStateStore>();
+builder.Services.AddSingleton<IDevUtilityService, DevUtilityService>();
+builder.Services.AddSingleton<ITailscaleServeCommandExecutor, TailscaleServeCommandExecutor>();
+builder.Services.AddSingleton<ITailscaleServeUtilityService, TailscaleServeUtilityService>();
 builder.Services.AddSingleton<ITelegramThreadFollowRegistry, TelegramThreadFollowRegistry>();
 builder.Services.AddSingleton<ITelegramTypingIndicatorRegistry, TelegramTypingIndicatorRegistry>();
 builder.Services.AddSingleton<ITelegramTurnReactionRegistry, TelegramTurnReactionRegistry>();

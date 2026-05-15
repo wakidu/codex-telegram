@@ -27,8 +27,7 @@ public sealed class TelegramButtonTests
         IReadOnlyList<IReadOnlyList<TelegramReplyButton>>? rows = TelegramCodexBotCommandHandler.BuildSessionButtons([first, second]);
 
         Assert.NotNull(rows);
-        Assert.Equal("Use 1", Assert.Single(rows[0]).Text);
-        Assert.Equal("Use 2", Assert.Single(rows[1]).Text);
+        Assert.Equal(["Use 1", "Use 2"], rows.SelectMany(row => row.Select(button => button.Text)).ToArray());
     }
 
     [Fact]
@@ -48,7 +47,17 @@ public sealed class TelegramButtonTests
 
         IReadOnlyList<string> labels = rows.SelectMany(row => row.Select(button => button.Text)).ToArray();
 
-        Assert.Equal(["Sessions", "Projects", "Help"], labels);
+        Assert.Equal(["Codex Sessions", "Projects", "Next App Server", "Tailscale", "🛑 Stop AI", "Help"], labels);
+    }
+
+    [Fact]
+    public void BuildHelpMenuButtons_ShowsCompactHelpCategories()
+    {
+        IReadOnlyList<IReadOnlyList<TelegramReplyButton>> rows = TelegramCodexBotCommandHandler.BuildHelpMenuButtons();
+
+        IReadOnlyList<string> labels = rows.SelectMany(row => row.Select(button => button.Text)).ToArray();
+
+        Assert.Equal(["Codex Sessions", "Projects", "Next App Server", "Tailscale", "Codex", "Admin/Debug", "Full Command Reference", "Back"], labels);
     }
 
     private static CodexSessionSummary CreateSession(string id, string name)

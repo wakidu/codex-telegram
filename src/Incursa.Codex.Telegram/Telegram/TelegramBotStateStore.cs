@@ -88,7 +88,56 @@ internal interface ITelegramBotStateStore
         CancellationToken cancellationToken);
 
     Task RemoveQueuedPromptsForSessionAsync(string sessionId, CancellationToken cancellationToken);
+
+    Task<PendingDevActionState?> GetPendingDevActionAsync(TelegramConversationScope conversation, CancellationToken cancellationToken);
+
+    Task SetPendingDevActionAsync(TelegramConversationScope conversation, PendingDevActionState pendingAction, CancellationToken cancellationToken);
+
+    Task ClearPendingDevActionAsync(TelegramConversationScope conversation, CancellationToken cancellationToken);
+
+    Task<PendingDevTargetPickerState?> GetPendingDevTargetPickerAsync(TelegramConversationScope conversation, CancellationToken cancellationToken);
+
+    Task SetPendingDevTargetPickerAsync(TelegramConversationScope conversation, PendingDevTargetPickerState pendingPicker, CancellationToken cancellationToken);
+
+    Task ClearPendingDevTargetPickerAsync(TelegramConversationScope conversation, CancellationToken cancellationToken);
+
+    Task<PendingTailscalePortInputState?> GetPendingTailscalePortInputAsync(TelegramConversationScope conversation, CancellationToken cancellationToken);
+
+    Task SetPendingTailscalePortInputAsync(TelegramConversationScope conversation, PendingTailscalePortInputState pendingInput, CancellationToken cancellationToken);
+
+    Task ClearPendingTailscalePortInputAsync(TelegramConversationScope conversation, CancellationToken cancellationToken);
+
+    Task<PendingMenuTextInputState?> GetPendingMenuTextInputAsync(TelegramConversationScope conversation, CancellationToken cancellationToken);
+
+    Task SetPendingMenuTextInputAsync(TelegramConversationScope conversation, PendingMenuTextInputState pendingInput, CancellationToken cancellationToken);
+
+    Task ClearPendingMenuTextInputAsync(TelegramConversationScope conversation, CancellationToken cancellationToken);
+
+    Task<PendingProjectAddPickerState?> GetPendingProjectAddPickerAsync(TelegramConversationScope conversation, CancellationToken cancellationToken);
+
+    Task SetPendingProjectAddPickerAsync(TelegramConversationScope conversation, PendingProjectAddPickerState pendingPicker, CancellationToken cancellationToken);
+
+    Task ClearPendingProjectAddPickerAsync(TelegramConversationScope conversation, CancellationToken cancellationToken);
 }
+
+internal sealed record PendingDevActionState(string Action, DateTimeOffset CreatedAtUtc);
+
+internal sealed record PendingDevTargetChoiceState(string Key, string WorkingDirectory);
+
+internal sealed record PendingDevTargetPickerState(
+    string Action,
+    List<PendingDevTargetChoiceState> Targets,
+    DateTimeOffset CreatedAtUtc);
+
+internal sealed record PendingTailscalePortInputState(DateTimeOffset CreatedAtUtc);
+
+internal sealed record PendingMenuTextInputState(string Action, DateTimeOffset CreatedAtUtc);
+
+internal sealed record PendingProjectAddChoiceState(string Key, string WorkingDirectory);
+
+internal sealed record PendingProjectAddPickerState(
+    List<PendingProjectAddChoiceState> Targets,
+    DateTimeOffset CreatedAtUtc);
 
 internal sealed record TelegramConversationState(
     TelegramConversationScope Scope,
@@ -389,6 +438,116 @@ internal sealed class TelegramBotStateStore : ITelegramBotStateStore
             return state;
         }, cancellationToken);
 
+    public async Task<PendingDevActionState?> GetPendingDevActionAsync(TelegramConversationScope conversation, CancellationToken cancellationToken)
+    {
+        TelegramBotState state = await LoadStateAsync(cancellationToken).ConfigureAwait(false);
+        return state.PendingDevActionsByScope.TryGetValue(conversation.ToStorageKey(), out PendingDevActionState? pendingAction)
+            ? pendingAction
+            : null;
+    }
+
+    public Task SetPendingDevActionAsync(TelegramConversationScope conversation, PendingDevActionState pendingAction, CancellationToken cancellationToken)
+        => MutateAsync(state =>
+        {
+            state.PendingDevActionsByScope[conversation.ToStorageKey()] = pendingAction;
+            return state;
+        }, cancellationToken);
+
+    public Task ClearPendingDevActionAsync(TelegramConversationScope conversation, CancellationToken cancellationToken)
+        => MutateAsync(state =>
+        {
+            state.PendingDevActionsByScope.Remove(conversation.ToStorageKey());
+            return state;
+        }, cancellationToken);
+
+    public async Task<PendingDevTargetPickerState?> GetPendingDevTargetPickerAsync(TelegramConversationScope conversation, CancellationToken cancellationToken)
+    {
+        TelegramBotState state = await LoadStateAsync(cancellationToken).ConfigureAwait(false);
+        return state.PendingDevTargetPickersByScope.TryGetValue(conversation.ToStorageKey(), out PendingDevTargetPickerState? pendingPicker)
+            ? pendingPicker
+            : null;
+    }
+
+    public Task SetPendingDevTargetPickerAsync(TelegramConversationScope conversation, PendingDevTargetPickerState pendingPicker, CancellationToken cancellationToken)
+        => MutateAsync(state =>
+        {
+            state.PendingDevTargetPickersByScope[conversation.ToStorageKey()] = pendingPicker;
+            return state;
+        }, cancellationToken);
+
+    public Task ClearPendingDevTargetPickerAsync(TelegramConversationScope conversation, CancellationToken cancellationToken)
+        => MutateAsync(state =>
+        {
+            state.PendingDevTargetPickersByScope.Remove(conversation.ToStorageKey());
+            return state;
+        }, cancellationToken);
+
+    public async Task<PendingTailscalePortInputState?> GetPendingTailscalePortInputAsync(TelegramConversationScope conversation, CancellationToken cancellationToken)
+    {
+        TelegramBotState state = await LoadStateAsync(cancellationToken).ConfigureAwait(false);
+        return state.PendingTailscalePortInputsByScope.TryGetValue(conversation.ToStorageKey(), out PendingTailscalePortInputState? pendingInput)
+            ? pendingInput
+            : null;
+    }
+
+    public Task SetPendingTailscalePortInputAsync(TelegramConversationScope conversation, PendingTailscalePortInputState pendingInput, CancellationToken cancellationToken)
+        => MutateAsync(state =>
+        {
+            state.PendingTailscalePortInputsByScope[conversation.ToStorageKey()] = pendingInput;
+            return state;
+        }, cancellationToken);
+
+    public Task ClearPendingTailscalePortInputAsync(TelegramConversationScope conversation, CancellationToken cancellationToken)
+        => MutateAsync(state =>
+        {
+            state.PendingTailscalePortInputsByScope.Remove(conversation.ToStorageKey());
+            return state;
+        }, cancellationToken);
+
+    public async Task<PendingMenuTextInputState?> GetPendingMenuTextInputAsync(TelegramConversationScope conversation, CancellationToken cancellationToken)
+    {
+        TelegramBotState state = await LoadStateAsync(cancellationToken).ConfigureAwait(false);
+        return state.PendingMenuTextInputsByScope.TryGetValue(conversation.ToStorageKey(), out PendingMenuTextInputState? pendingInput)
+            ? pendingInput
+            : null;
+    }
+
+    public Task SetPendingMenuTextInputAsync(TelegramConversationScope conversation, PendingMenuTextInputState pendingInput, CancellationToken cancellationToken)
+        => MutateAsync(state =>
+        {
+            state.PendingMenuTextInputsByScope[conversation.ToStorageKey()] = pendingInput;
+            return state;
+        }, cancellationToken);
+
+    public Task ClearPendingMenuTextInputAsync(TelegramConversationScope conversation, CancellationToken cancellationToken)
+        => MutateAsync(state =>
+        {
+            state.PendingMenuTextInputsByScope.Remove(conversation.ToStorageKey());
+            return state;
+        }, cancellationToken);
+
+    public async Task<PendingProjectAddPickerState?> GetPendingProjectAddPickerAsync(TelegramConversationScope conversation, CancellationToken cancellationToken)
+    {
+        TelegramBotState state = await LoadStateAsync(cancellationToken).ConfigureAwait(false);
+        return state.PendingProjectAddPickersByScope.TryGetValue(conversation.ToStorageKey(), out PendingProjectAddPickerState? pendingPicker)
+            ? pendingPicker
+            : null;
+    }
+
+    public Task SetPendingProjectAddPickerAsync(TelegramConversationScope conversation, PendingProjectAddPickerState pendingPicker, CancellationToken cancellationToken)
+        => MutateAsync(state =>
+        {
+            state.PendingProjectAddPickersByScope[conversation.ToStorageKey()] = pendingPicker;
+            return state;
+        }, cancellationToken);
+
+    public Task ClearPendingProjectAddPickerAsync(TelegramConversationScope conversation, CancellationToken cancellationToken)
+        => MutateAsync(state =>
+        {
+            state.PendingProjectAddPickersByScope.Remove(conversation.ToStorageKey());
+            return state;
+        }, cancellationToken);
+
     private async Task MutateAsync(Func<TelegramBotState, TelegramBotState> updater, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -572,5 +731,15 @@ internal sealed class TelegramBotStateStore : ITelegramBotStateStore
         public List<long> TrustedChatIds { get; set; } = [];
 
         public List<TelegramQueuedPrompt> QueuedPrompts { get; set; } = [];
+
+        public Dictionary<string, PendingDevActionState> PendingDevActionsByScope { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public Dictionary<string, PendingDevTargetPickerState> PendingDevTargetPickersByScope { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public Dictionary<string, PendingTailscalePortInputState> PendingTailscalePortInputsByScope { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public Dictionary<string, PendingMenuTextInputState> PendingMenuTextInputsByScope { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public Dictionary<string, PendingProjectAddPickerState> PendingProjectAddPickersByScope { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     }
 }
