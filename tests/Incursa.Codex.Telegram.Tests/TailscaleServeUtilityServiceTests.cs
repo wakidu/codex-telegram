@@ -55,8 +55,30 @@ public sealed class TailscaleServeUtilityServiceTests
 
         Assert.False(result.Enabled);
         ProcessStartInfo startInfo = executor.Calls[1];
-        Assert.Equal(["serve", "--https=3000", "http://localhost:3000", "off"], startInfo.ArgumentList);
+        Assert.Equal(["serve", "off"], startInfo.ArgumentList);
         Assert.DoesNotContain("reset", startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public async Task GetMenuStateAsync_UsesRootTailscaleUrlForEnabledEntries()
+    {
+        FakeTailscaleExecutor executor = new();
+        executor.Results.Enqueue(new TailscaleCommandResult(0, """{"Self":{"DNSName":"node.tailnet.ts.net."}}""", string.Empty));
+        executor.Results.Enqueue(new TailscaleCommandResult(0, "https://node.tailnet.ts.net/\n|-- / proxy http://127.0.0.1:3500", string.Empty));
+
+        TailscaleServeUtilityService service = CreateService(
+            executor,
+            new TailscaleUtilityOptions
+            {
+                ExecutablePath = "tailscale",
+                Entries = [new TailscaleUtilityEntryOptions { Name = "Admin", Port = 3500 }],
+            });
+
+        TailscaleServeMenuState state = await service.GetMenuStateAsync(CancellationToken.None);
+
+        TailscaleServeEntryState entry = Assert.Single(state.Entries);
+        Assert.True(entry.Enabled);
+        Assert.Equal("https://node.tailnet.ts.net/", entry.TailscaleUrl);
     }
 
     [Fact]

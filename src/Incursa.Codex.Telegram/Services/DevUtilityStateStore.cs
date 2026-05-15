@@ -11,7 +11,8 @@ internal sealed record DevProcessRecord(
     string LogPath,
     int? Port,
     string? PreviewCommand,
-    DateTimeOffset StartedAtUtc);
+    DateTimeOffset StartedAtUtc,
+    int? DetectedPort = null);
 
 internal sealed class DevUtilityStateStore
 {

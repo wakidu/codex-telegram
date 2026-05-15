@@ -124,7 +124,7 @@ internal sealed class TailscaleServeUtilityService : ITailscaleServeUtilityServi
                 entry.Port,
                 activePorts.Contains(entry.Port),
                 $"http://localhost:{entry.Port}",
-                hostname is null ? null : $"https://{hostname}:{entry.Port}"))
+                BuildRootTailscaleUrl(hostname)))
             .OrderBy(entry => entry.Port)
             .ToList();
 
@@ -139,7 +139,7 @@ internal sealed class TailscaleServeUtilityService : ITailscaleServeUtilityServi
         bool enabled = !activePorts.Contains(port);
         ProcessStartInfo startInfo = enabled
             ? BuildEnableStartInfo(_options.ExecutablePath, port)
-            : BuildDisableStartInfo(_options.ExecutablePath, port);
+            : BuildDisableStartInfo(_options.ExecutablePath);
 
         TailscaleCommandResult result = await ExecuteSafeAsync(startInfo, cancellationToken).ConfigureAwait(false);
         if (result.ExitCode != 0)
@@ -149,10 +149,10 @@ internal sealed class TailscaleServeUtilityService : ITailscaleServeUtilityServi
 
         string? hostname = await TryGetHostnameAsync(cancellationToken).ConfigureAwait(false);
         string localUrl = $"http://localhost:{port}";
-        string? tailscaleUrl = hostname is null ? null : $"https://{hostname}:{port}";
+        string? tailscaleUrl = BuildRootTailscaleUrl(hostname);
         string message = enabled
-            ? $"Enabled Tailscale Serve for port {port}."
-            : $"Disabled Tailscale Serve for port {port}.";
+            ? $"Enabled Tailscale Serve root route for backend port {port}."
+            : $"Disabled the current Tailscale Serve root route for backend port {port}.";
 
         return new TailscaleServeToggleResult(enabled, port, message, localUrl, tailscaleUrl);
     }
@@ -179,12 +179,10 @@ internal sealed class TailscaleServeUtilityService : ITailscaleServeUtilityServi
         return startInfo;
     }
 
-    internal static ProcessStartInfo BuildDisableStartInfo(string executablePath, int port)
+    internal static ProcessStartInfo BuildDisableStartInfo(string executablePath)
     {
         ProcessStartInfo startInfo = BuildBaseStartInfo(executablePath);
         startInfo.ArgumentList.Add("serve");
-        startInfo.ArgumentList.Add($"--https={port}");
-        startInfo.ArgumentList.Add($"http://localhost:{port}");
         startInfo.ArgumentList.Add("off");
         return startInfo;
     }
@@ -256,6 +254,11 @@ internal sealed class TailscaleServeUtilityService : ITailscaleServeUtilityServi
 
         return null;
     }
+
+    internal static string? BuildRootTailscaleUrl(string? hostname)
+        => string.IsNullOrWhiteSpace(hostname)
+            ? null
+            : $"https://{hostname.TrimEnd('/')}/";
 
     private async Task<IReadOnlySet<int>> GetActivePortsAsync(CancellationToken cancellationToken)
     {

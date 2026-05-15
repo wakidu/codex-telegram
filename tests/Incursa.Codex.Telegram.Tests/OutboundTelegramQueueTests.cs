@@ -977,6 +977,7 @@ public sealed class OutboundTelegramQueueTests
         public Task SendTextMessageAsync(
             TelegramConversationScope conversation,
             string text,
+            IReadOnlyList<IReadOnlyList<TelegramReplyButton>>? buttons,
             CancellationToken cancellationToken,
             TelegramDebugMessageContext? debugContext = null)
         {
@@ -995,7 +996,7 @@ public sealed class OutboundTelegramQueueTests
                 return Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             }
 
-            SentTelegramMessage sent = new(conversation, text, debugContext);
+            SentTelegramMessage sent = new(conversation, text, buttons, debugContext);
             Sent.Add(sent);
             _nextSend.TrySetResult(sent);
             return Task.CompletedTask;
@@ -1022,7 +1023,11 @@ public sealed class OutboundTelegramQueueTests
         }
     }
 
-    private sealed record SentTelegramMessage(TelegramConversationScope Conversation, string Text, TelegramDebugMessageContext? DebugContext);
+    private sealed record SentTelegramMessage(
+        TelegramConversationScope Conversation,
+        string Text,
+        IReadOnlyList<IReadOnlyList<TelegramReplyButton>>? Buttons,
+        TelegramDebugMessageContext? DebugContext);
 
     private sealed record SentTelegramFileMessage(TelegramConversationScope Conversation, OutboundTelegramFile File, TelegramDebugMessageContext? DebugContext);
 

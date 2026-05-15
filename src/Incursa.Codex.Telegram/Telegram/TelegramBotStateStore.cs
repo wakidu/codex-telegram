@@ -118,6 +118,12 @@ internal interface ITelegramBotStateStore
     Task SetPendingProjectAddPickerAsync(TelegramConversationScope conversation, PendingProjectAddPickerState pendingPicker, CancellationToken cancellationToken);
 
     Task ClearPendingProjectAddPickerAsync(TelegramConversationScope conversation, CancellationToken cancellationToken);
+
+    Task<PendingGitBranchPickerState?> GetPendingGitBranchPickerAsync(TelegramConversationScope conversation, CancellationToken cancellationToken);
+
+    Task SetPendingGitBranchPickerAsync(TelegramConversationScope conversation, PendingGitBranchPickerState pendingPicker, CancellationToken cancellationToken);
+
+    Task ClearPendingGitBranchPickerAsync(TelegramConversationScope conversation, CancellationToken cancellationToken);
 }
 
 internal sealed record PendingDevActionState(string Action, DateTimeOffset CreatedAtUtc);
@@ -137,6 +143,13 @@ internal sealed record PendingProjectAddChoiceState(string Key, string WorkingDi
 
 internal sealed record PendingProjectAddPickerState(
     List<PendingProjectAddChoiceState> Targets,
+    DateTimeOffset CreatedAtUtc);
+
+internal sealed record PendingGitBranchChoiceState(string Key, string BranchName);
+
+internal sealed record PendingGitBranchPickerState(
+    string WorkingDirectory,
+    List<PendingGitBranchChoiceState> Branches,
     DateTimeOffset CreatedAtUtc);
 
 internal sealed record TelegramConversationState(
@@ -548,6 +561,28 @@ internal sealed class TelegramBotStateStore : ITelegramBotStateStore
             return state;
         }, cancellationToken);
 
+    public async Task<PendingGitBranchPickerState?> GetPendingGitBranchPickerAsync(TelegramConversationScope conversation, CancellationToken cancellationToken)
+    {
+        TelegramBotState state = await LoadStateAsync(cancellationToken).ConfigureAwait(false);
+        return state.PendingGitBranchPickersByScope.TryGetValue(conversation.ToStorageKey(), out PendingGitBranchPickerState? pendingPicker)
+            ? pendingPicker
+            : null;
+    }
+
+    public Task SetPendingGitBranchPickerAsync(TelegramConversationScope conversation, PendingGitBranchPickerState pendingPicker, CancellationToken cancellationToken)
+        => MutateAsync(state =>
+        {
+            state.PendingGitBranchPickersByScope[conversation.ToStorageKey()] = pendingPicker;
+            return state;
+        }, cancellationToken);
+
+    public Task ClearPendingGitBranchPickerAsync(TelegramConversationScope conversation, CancellationToken cancellationToken)
+        => MutateAsync(state =>
+        {
+            state.PendingGitBranchPickersByScope.Remove(conversation.ToStorageKey());
+            return state;
+        }, cancellationToken);
+
     private async Task MutateAsync(Func<TelegramBotState, TelegramBotState> updater, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -741,5 +776,7 @@ internal sealed class TelegramBotStateStore : ITelegramBotStateStore
         public Dictionary<string, PendingMenuTextInputState> PendingMenuTextInputsByScope { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
         public Dictionary<string, PendingProjectAddPickerState> PendingProjectAddPickersByScope { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public Dictionary<string, PendingGitBranchPickerState> PendingGitBranchPickersByScope { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     }
 }

@@ -112,6 +112,7 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
     private readonly IAudioTranscriptionService _audioTranscriptionService;
     private readonly IOutboundTelegramQueue _outboundQueue;
     private readonly IDevUtilityService _devUtilityService;
+    private readonly IGitUtilityService _gitUtilityService;
     private readonly ITailscaleServeUtilityService _tailscaleServeUtilityService;
     private readonly TelegramBotOptions _options;
     private readonly ILogger<TelegramCodexBotCommandHandler> _logger;
@@ -137,6 +138,7 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
         IAudioTranscriptionService audioTranscriptionService,
         IOutboundTelegramQueue outboundQueue,
         IDevUtilityService devUtilityService,
+        IGitUtilityService gitUtilityService,
         ITailscaleServeUtilityService tailscaleServeUtilityService,
         IOptions<TelegramBotOptions> options,
         ILogger<TelegramCodexBotCommandHandler> logger)
@@ -157,6 +159,7 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
         _audioTranscriptionService = audioTranscriptionService;
         _outboundQueue = outboundQueue;
         _devUtilityService = devUtilityService;
+        _gitUtilityService = gitUtilityService;
         _tailscaleServeUtilityService = tailscaleServeUtilityService;
         _options = options.Value;
         _logger = logger;
@@ -271,7 +274,7 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
             switch (command.Name)
             {
                 case "menu":
-                    await ReplyAsync(sender, message, BuildMenuText(), BuildMenuButtons(), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+                    await ReplyAsync(sender, message, await BuildMenuTextAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false), BuildMenuButtons(), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
                     break;
                 case "help":
                     await ReplyAsync(sender, message, BuildHelpMenuText(), BuildHelpMenuButtons(), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
@@ -347,6 +350,9 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
                     break;
                 case "dev":
                     await HandleDevMenuAsync(message, sender, cancellationToken).ConfigureAwait(false);
+                    break;
+                case "git":
+                    await HandleGitMenuAsync(message, sender, cancellationToken).ConfigureAwait(false);
                     break;
                 case "tailscale":
                     await HandleTailscaleMenuAsync(message, sender, cancellationToken).ConfigureAwait(false);
@@ -435,6 +441,10 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
                     await sender.AnswerCallbackQueryAsync(callback.Id, "Status.", cancellationToken).ConfigureAwait(false);
                     await HandleStatusAsync(callbackMessage, parts[1], sender, cancellationToken).ConfigureAwait(false);
                     break;
+                case "sessions":
+                    await sender.AnswerCallbackQueryAsync(callback.Id, "Refreshing.", cancellationToken).ConfigureAwait(false);
+                    await HandleSessionsActionAsync(callbackMessage, parts[1], sender, cancellationToken).ConfigureAwait(false);
+                    break;
                 case "dev":
                     await sender.AnswerCallbackQueryAsync(callback.Id, "Dev action.", cancellationToken).ConfigureAwait(false);
                     await HandleDevActionAsync(callbackMessage, parts[1], sender, cancellationToken).ConfigureAwait(false);
@@ -446,6 +456,18 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
                 case "devmanual":
                     await sender.AnswerCallbackQueryAsync(callback.Id, "Enter a path.", cancellationToken).ConfigureAwait(false);
                     await HandleDevManualEntryRequestAsync(callbackMessage, parts[1], sender, cancellationToken).ConfigureAwait(false);
+                    break;
+                case "git":
+                    await sender.AnswerCallbackQueryAsync(callback.Id, "Git.", cancellationToken).ConfigureAwait(false);
+                    await HandleGitActionAsync(callbackMessage, parts[1], sender, cancellationToken).ConfigureAwait(false);
+                    break;
+                case "gitbranch":
+                    await sender.AnswerCallbackQueryAsync(callback.Id, "Git branch.", cancellationToken).ConfigureAwait(false);
+                    await HandleGitBranchActionAsync(callbackMessage, parts[1], sender, cancellationToken).ConfigureAwait(false);
+                    break;
+                case "gitco":
+                    await sender.AnswerCallbackQueryAsync(callback.Id, "Switching branch.", cancellationToken).ConfigureAwait(false);
+                    await HandleGitCheckoutSelectionAsync(callbackMessage, parts[1], sender, cancellationToken).ConfigureAwait(false);
                     break;
                 case "tsp":
                     await sender.AnswerCallbackQueryAsync(callback.Id, "Tailscale.", cancellationToken).ConfigureAwait(false);
@@ -533,6 +555,14 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
                     await sender.AnswerCallbackQueryAsync(callback.Id, "Stopping.", cancellationToken).ConfigureAwait(false);
                     await HandleStopAsync(callbackMessage, parts[1], sender, cancellationToken).ConfigureAwait(false);
                     break;
+                case "delete":
+                    await sender.AnswerCallbackQueryAsync(callback.Id, "Delete session.", cancellationToken).ConfigureAwait(false);
+                    await HandleDeleteSessionPromptAsync(callbackMessage, parts[1], sender, cancellationToken).ConfigureAwait(false);
+                    break;
+                case "deleteconfirm":
+                    await sender.AnswerCallbackQueryAsync(callback.Id, "Deleting session.", cancellationToken).ConfigureAwait(false);
+                    await HandleDeleteSessionConfirmAsync(callbackMessage, parts[1], sender, cancellationToken).ConfigureAwait(false);
+                    break;
                 default:
                     await sender.AnswerCallbackQueryAsync(callback.Id, "Unsupported action.", cancellationToken).ConfigureAwait(false);
                     break;
@@ -590,6 +620,9 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
             case "dev":
                 await HandleDevMenuAsync(message, sender, cancellationToken).ConfigureAwait(false);
                 return;
+            case "git":
+                await HandleGitMenuAsync(message, sender, cancellationToken).ConfigureAwait(false);
+                return;
             case "tailscale":
                 await HandleTailscaleMenuAsync(message, sender, cancellationToken).ConfigureAwait(false);
                 return;
@@ -604,12 +637,268 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
         await ClearPendingMenuWorkflowAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
         await _stateStore.ClearPendingDevActionAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
         await _stateStore.ClearPendingDevTargetPickerAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+        await _stateStore.ClearPendingGitBranchPickerAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
         await _stateStore.ClearPendingTailscalePortInputAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
         await ReplyAsync(
             sender,
             message,
             "Next App Server:" + Environment.NewLine + "Use these controls to manage the local Next app server on this machine.",
             BuildDevMenuButtons(),
+            cancellationToken,
+            includeNavigationButtons: false).ConfigureAwait(false);
+    }
+
+    private async Task HandleGitMenuAsync(TelegramInboundMessage message, ITelegramBotMessageSender sender, CancellationToken cancellationToken)
+    {
+        await ClearPendingMenuWorkflowAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+        await _stateStore.ClearPendingDevActionAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+        await _stateStore.ClearPendingDevTargetPickerAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+        await _stateStore.ClearPendingTailscalePortInputAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+        await _stateStore.ClearPendingGitBranchPickerAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+
+        ResolvedProject resolvedProject = await ResolveActiveProjectAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+        if (resolvedProject.Project is null)
+        {
+            await ReplyAsync(sender, message, resolvedProject.Message, BuildBackButtons("menu"), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+            return;
+        }
+
+        GitRepositoryMenuState state = await _gitUtilityService.GetMenuStateAsync(resolvedProject.Project.WorkingDirectory, cancellationToken).ConfigureAwait(false);
+        await ReplyAsync(
+            sender,
+            message,
+            FormatGitMenu(state),
+            BuildGitMenuButtons(),
+            cancellationToken,
+            includeNavigationButtons: false).ConfigureAwait(false);
+    }
+
+    private async Task HandleGitActionAsync(
+        TelegramInboundMessage message,
+        string arguments,
+        ITelegramBotMessageSender sender,
+        CancellationToken cancellationToken)
+    {
+        switch (arguments.Trim().ToLowerInvariant())
+        {
+            case "":
+            case "menu":
+            case "refresh":
+                await HandleGitMenuAsync(message, sender, cancellationToken).ConfigureAwait(false);
+                return;
+            case "status":
+                await HandleGitStatusAsync(message, sender, cancellationToken).ConfigureAwait(false);
+                return;
+            case "diff":
+                await HandleGitDiffAsync(message, sender, cancellationToken).ConfigureAwait(false);
+                return;
+            case "commit":
+                await HandleGitCommitRequestAsync(message, sender, cancellationToken).ConfigureAwait(false);
+                return;
+            case "push":
+                await HandleGitPushAsync(message, sender, cancellationToken).ConfigureAwait(false);
+                return;
+            case "pull":
+                await HandleGitPullAsync(message, sender, cancellationToken).ConfigureAwait(false);
+                return;
+            case "branch":
+                await HandleGitBranchMenuAsync(message, sender, cancellationToken).ConfigureAwait(false);
+                return;
+            default:
+                await ReplyAsync(sender, message, "Unsupported Git action.", BuildGitMenuButtons(), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+                return;
+        }
+    }
+
+    private async Task HandleGitStatusAsync(TelegramInboundMessage message, ITelegramBotMessageSender sender, CancellationToken cancellationToken)
+    {
+        ResolvedProject resolvedProject = await ResolveActiveProjectAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+        if (resolvedProject.Project is null)
+        {
+            await ReplyAsync(sender, message, resolvedProject.Message, BuildBackButtons("menu"), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+            return;
+        }
+
+        string statusText = await _gitUtilityService.GetStatusAsync(resolvedProject.Project.WorkingDirectory, cancellationToken).ConfigureAwait(false);
+        await ReplyWithGitMenuAsync(sender, message, resolvedProject.Project.WorkingDirectory, statusText, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task HandleGitDiffAsync(TelegramInboundMessage message, ITelegramBotMessageSender sender, CancellationToken cancellationToken)
+    {
+        ResolvedProject resolvedProject = await ResolveActiveProjectAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+        if (resolvedProject.Project is null)
+        {
+            await ReplyAsync(sender, message, resolvedProject.Message, BuildBackButtons("menu"), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+            return;
+        }
+
+        string diffText = await _gitUtilityService.GetDiffSummaryAsync(resolvedProject.Project.WorkingDirectory, cancellationToken).ConfigureAwait(false);
+        await ReplyWithGitMenuAsync(sender, message, resolvedProject.Project.WorkingDirectory, diffText, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task HandleGitCommitRequestAsync(TelegramInboundMessage message, ITelegramBotMessageSender sender, CancellationToken cancellationToken)
+    {
+        ResolvedProject resolvedProject = await ResolveActiveProjectAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+        if (resolvedProject.Project is null)
+        {
+            await ReplyAsync(sender, message, resolvedProject.Message, BuildBackButtons("menu"), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+            return;
+        }
+
+        await _stateStore.ClearPendingGitBranchPickerAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+        await _stateStore.SetPendingMenuTextInputAsync(
+            message.ConversationScope,
+            new PendingMenuTextInputState("gitcommit", DateTimeOffset.UtcNow),
+            cancellationToken).ConfigureAwait(false);
+        await ReplyAsync(
+            sender,
+            message,
+            "✍️ Send commit message",
+            BuildPromptButtons("git"),
+            cancellationToken,
+            includeNavigationButtons: false).ConfigureAwait(false);
+    }
+
+    private async Task HandlePendingGitCommitMessageAsync(TelegramInboundMessage message, ITelegramBotMessageSender sender, CancellationToken cancellationToken)
+    {
+        string commitMessage = message.Text?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(commitMessage))
+        {
+            await ReplyAsync(
+                sender,
+                message,
+                "⚠️ Commit message cannot be empty." + Environment.NewLine + "✍️ Send commit message",
+                BuildPromptButtons("git"),
+                cancellationToken,
+                includeNavigationButtons: false).ConfigureAwait(false);
+            return;
+        }
+
+        ResolvedProject resolvedProject = await ResolveActiveProjectAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+        if (resolvedProject.Project is null)
+        {
+            await _stateStore.ClearPendingMenuTextInputAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+            await ReplyAsync(sender, message, resolvedProject.Message, BuildBackButtons("menu"), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+            return;
+        }
+
+        await _stateStore.ClearPendingMenuTextInputAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+        GitActionResult result = await _gitUtilityService.CommitAsync(resolvedProject.Project.WorkingDirectory, commitMessage, cancellationToken).ConfigureAwait(false);
+        await ReplyWithGitMenuAsync(sender, message, resolvedProject.Project.WorkingDirectory, result.Message, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task HandleGitPushAsync(TelegramInboundMessage message, ITelegramBotMessageSender sender, CancellationToken cancellationToken)
+    {
+        ResolvedProject resolvedProject = await ResolveActiveProjectAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+        if (resolvedProject.Project is null)
+        {
+            await ReplyAsync(sender, message, resolvedProject.Message, BuildBackButtons("menu"), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+            return;
+        }
+
+        GitActionResult result = await _gitUtilityService.PushAsync(resolvedProject.Project.WorkingDirectory, cancellationToken).ConfigureAwait(false);
+        await ReplyWithGitMenuAsync(sender, message, resolvedProject.Project.WorkingDirectory, result.Message, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task HandleGitPullAsync(TelegramInboundMessage message, ITelegramBotMessageSender sender, CancellationToken cancellationToken)
+    {
+        ResolvedProject resolvedProject = await ResolveActiveProjectAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+        if (resolvedProject.Project is null)
+        {
+            await ReplyAsync(sender, message, resolvedProject.Message, BuildBackButtons("menu"), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+            return;
+        }
+
+        GitActionResult result = await _gitUtilityService.PullAsync(resolvedProject.Project.WorkingDirectory, cancellationToken).ConfigureAwait(false);
+        await ReplyWithGitMenuAsync(sender, message, resolvedProject.Project.WorkingDirectory, result.Message, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task HandleGitBranchMenuAsync(TelegramInboundMessage message, ITelegramBotMessageSender sender, CancellationToken cancellationToken)
+    {
+        ResolvedProject resolvedProject = await ResolveActiveProjectAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+        if (resolvedProject.Project is null)
+        {
+            await ReplyAsync(sender, message, resolvedProject.Message, BuildBackButtons("menu"), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+            return;
+        }
+
+        GitBranchMenuState state = await _gitUtilityService.GetBranchMenuStateAsync(resolvedProject.Project.WorkingDirectory, cancellationToken).ConfigureAwait(false);
+        PendingGitBranchPickerState picker = BuildGitBranchPickerState(state);
+        await _stateStore.SetPendingGitBranchPickerAsync(message.ConversationScope, picker, cancellationToken).ConfigureAwait(false);
+        await ReplyAsync(
+            sender,
+            message,
+            FormatGitBranchMenu(state),
+            BuildGitBranchMenuButtons(state, picker),
+            cancellationToken,
+            includeNavigationButtons: false).ConfigureAwait(false);
+    }
+
+    private async Task HandleGitBranchActionAsync(
+        TelegramInboundMessage message,
+        string arguments,
+        ITelegramBotMessageSender sender,
+        CancellationToken cancellationToken)
+    {
+        switch (arguments.Trim().ToLowerInvariant())
+        {
+            case "":
+            case "menu":
+            case "refresh":
+                await HandleGitBranchMenuAsync(message, sender, cancellationToken).ConfigureAwait(false);
+                return;
+            default:
+                await ReplyAsync(sender, message, "Unsupported Git branch action.", BuildBackButtons("git"), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+                return;
+        }
+    }
+
+    private async Task HandleGitCheckoutSelectionAsync(
+        TelegramInboundMessage message,
+        string branchKey,
+        ITelegramBotMessageSender sender,
+        CancellationToken cancellationToken)
+    {
+        PendingGitBranchPickerState? pendingPicker = await _stateStore.GetPendingGitBranchPickerAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+        PendingGitBranchChoiceState? selected = pendingPicker?.Branches.FirstOrDefault(branch => string.Equals(branch.Key, branchKey, StringComparison.OrdinalIgnoreCase));
+        if (pendingPicker is null || selected is null)
+        {
+            await ReplyAsync(sender, message, "That branch selection is stale. Refresh the branch list and try again.", BuildBackButtons("git"), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+            return;
+        }
+
+        ResolvedProject resolvedProject = await ResolveActiveProjectAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+        if (resolvedProject.Project is null)
+        {
+            await ReplyAsync(sender, message, resolvedProject.Message, BuildBackButtons("menu"), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+            return;
+        }
+
+        if (!PathComparer.Equals(resolvedProject.Project.WorkingDirectory, pendingPicker.WorkingDirectory))
+        {
+            await _stateStore.ClearPendingGitBranchPickerAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+            await ReplyAsync(sender, message, "The selected project changed. Reopen the Git branch menu and try again.", BuildBackButtons("git"), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+            return;
+        }
+
+        GitActionResult result = await _gitUtilityService.CheckoutBranchAsync(resolvedProject.Project.WorkingDirectory, selected.BranchName, cancellationToken).ConfigureAwait(false);
+        await ReplyWithGitMenuAsync(sender, message, resolvedProject.Project.WorkingDirectory, result.Message, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ReplyWithGitMenuAsync(
+        ITelegramBotMessageSender sender,
+        TelegramInboundMessage message,
+        string workingDirectory,
+        string resultText,
+        CancellationToken cancellationToken)
+    {
+        GitRepositoryMenuState state = await _gitUtilityService.GetMenuStateAsync(workingDirectory, cancellationToken).ConfigureAwait(false);
+        string text = string.Join(Environment.NewLine, [resultText, string.Empty, FormatGitMenu(state)]).TrimEnd();
+        await ReplyAsync(
+            sender,
+            message,
+            text,
+            BuildGitMenuButtons(),
             cancellationToken,
             includeNavigationButtons: false).ConfigureAwait(false);
     }
@@ -652,6 +941,7 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
                 result.Message,
                 $"Local URL: {result.LocalUrl}",
                 string.IsNullOrWhiteSpace(result.TailscaleUrl) ? "Tailscale URL: unavailable" : $"Tailscale URL: {result.TailscaleUrl}",
+                "Note: disabling an active entry turns off the current root Serve route.",
                 string.Empty,
                 FormatTailscaleMenu(state)
             ]).TrimEnd();
@@ -724,6 +1014,7 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
             result.Message,
             $"Local URL: {result.LocalUrl}",
             string.IsNullOrWhiteSpace(result.TailscaleUrl) ? "Tailscale URL: unavailable" : $"Tailscale URL: {result.TailscaleUrl}",
+            "Note: disabling an active entry turns off the current root Serve route.",
             string.Empty,
             FormatTailscaleMenu(state)
         ]).TrimEnd();
@@ -838,6 +1129,70 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
             includeNavigationButtons: false).ConfigureAwait(false);
     }
 
+    private async Task HandleDeleteSessionPromptAsync(
+        TelegramInboundMessage message,
+        string arguments,
+        ITelegramBotMessageSender sender,
+        CancellationToken cancellationToken)
+    {
+        ResolvedSession resolved = await ResolveSessionAsync(message.ConversationScope, arguments, cancellationToken).ConfigureAwait(false);
+        if (resolved.Session is null)
+        {
+            await HandleSessionsAsync(message, sender, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        string projectName = CodexTextFormatting.ResolveProjectName(resolved.Session.WorkingDirectory);
+        string text = string.Join(
+            Environment.NewLine,
+            [
+                $"Delete {resolved.Session.Name}?",
+                $"Project: {projectName}",
+                "This will stop the runtime if needed and hide the session from Telegram lists."
+            ]);
+        await ReplyAsync(
+            sender,
+            message,
+            text,
+            BuildDeleteConfirmationButtons(resolved.Session.Id),
+            cancellationToken,
+            includeNavigationButtons: false).ConfigureAwait(false);
+    }
+
+    private async Task HandleDeleteSessionConfirmAsync(
+        TelegramInboundMessage message,
+        string arguments,
+        ITelegramBotMessageSender sender,
+        CancellationToken cancellationToken)
+    {
+        ResolvedSession resolved = await ResolveSessionAsync(message.ConversationScope, arguments, cancellationToken).ConfigureAwait(false);
+        if (resolved.Session is null)
+        {
+            await HandleSessionsAsync(message, sender, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await _sessionManager.StopAsync(resolved.Session.Id, cancellationToken).ConfigureAwait(false);
+        await _sessionManager.ForgetAsync(resolved.Session.Id, cancellationToken).ConfigureAwait(false);
+
+        string? activeSessionId = await _stateStore.GetActiveSessionIdAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
+        IReadOnlyCollection<string> trackedSessionIds = await _stateStore.GetTrackedSessionIdsAsync(cancellationToken).ConfigureAwait(false);
+        IReadOnlyCollection<CodexSessionSummary> sessions = await _sessionManager.ListSessionsAsync(cancellationToken).ConfigureAwait(false);
+        SessionListView view = BuildSessionListView(
+            sessions,
+            activeSessionId,
+            trackedSessionIds,
+            new SessionListRequest(false, DefaultSessionListLimit));
+        string text = $"Deleted {resolved.Session.Name}.{Environment.NewLine}{Environment.NewLine}{FormatSessions(view)}";
+        await ReplyAsync(
+            sender,
+            message,
+            text,
+            BuildSessionMenuButtons(view.Sessions),
+            cancellationToken,
+            includeNavigationButtons: false).ConfigureAwait(false);
+    }
+
     private async Task HandleMenuBackAsync(
         TelegramInboundMessage message,
         string target,
@@ -848,7 +1203,7 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
         {
             case "menu":
                 await ClearPendingMenuWorkflowAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
-                await ReplyAsync(sender, message, BuildMenuText(), BuildMenuButtons(), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+                await ReplyAsync(sender, message, await BuildMenuTextAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false), BuildMenuButtons(), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
                 return;
             case "sessions":
                 await HandleSessionsAsync(message, sender, cancellationToken).ConfigureAwait(false);
@@ -859,6 +1214,9 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
             case "dev":
                 await HandleDevMenuAsync(message, sender, cancellationToken).ConfigureAwait(false);
                 return;
+            case "git":
+                await HandleGitMenuAsync(message, sender, cancellationToken).ConfigureAwait(false);
+                return;
             case "tailscale":
                 await HandleTailscaleMenuAsync(message, sender, cancellationToken).ConfigureAwait(false);
                 return;
@@ -867,7 +1225,7 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
                 await ReplyAsync(sender, message, BuildHelpMenuText(), BuildHelpMenuButtons(), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
                 return;
             default:
-                await ReplyAsync(sender, message, BuildMenuText(), BuildMenuButtons(), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+                await ReplyAsync(sender, message, await BuildMenuTextAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false), BuildMenuButtons(), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
                 return;
         }
     }
@@ -1002,6 +1360,9 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
             case "projectadd":
                 await HandlePendingProjectAddInputAsync(message, sender, cancellationToken).ConfigureAwait(false);
                 return;
+            case "gitcommit":
+                await HandlePendingGitCommitMessageAsync(message, sender, cancellationToken).ConfigureAwait(false);
+                return;
             default:
                 await _stateStore.ClearPendingMenuTextInputAsync(message.ConversationScope, cancellationToken).ConfigureAwait(false);
                 return;
@@ -1015,6 +1376,18 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
         CancellationToken cancellationToken)
     {
         string normalizedAction = action.Trim().ToLowerInvariant();
+        switch (normalizedAction)
+        {
+            case "":
+            case "menu":
+            case "refresh":
+                await HandleDevMenuAsync(message, sender, cancellationToken).ConfigureAwait(false);
+                return;
+            case "killports":
+                await HandleDevKillPortsAsync(message, sender, cancellationToken).ConfigureAwait(false);
+                return;
+        }
+
         if (!IsSupportedDevAction(normalizedAction))
         {
             await ReplyAsync(sender, message, "Unsupported dev action.", null, cancellationToken).ConfigureAwait(false);
@@ -1176,6 +1549,15 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
         };
 
         await ReplyAsync(sender, message, text, BuildDevMenuButtons(), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+    }
+
+    private async Task HandleDevKillPortsAsync(
+        TelegramInboundMessage message,
+        ITelegramBotMessageSender sender,
+        CancellationToken cancellationToken)
+    {
+        string result = await _devUtilityService.KillDevPortsAsync(cancellationToken).ConfigureAwait(false);
+        await ReplyAsync(sender, message, result, BuildDevMenuButtons(), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
     }
 
     private async Task HandleTrustAsync(
@@ -1472,6 +1854,24 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
         SessionListRequest request = ParseSessionListRequest(_parser.Parse(message.Text).Arguments);
         SessionListView view = BuildSessionListView(sessions, activeSessionId, trackedSessionIds, request);
         await ReplyAsync(sender, message, FormatSessions(view), BuildSessionMenuButtons(view.Sessions), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+    }
+
+    private async Task HandleSessionsActionAsync(
+        TelegramInboundMessage message,
+        string arguments,
+        ITelegramBotMessageSender sender,
+        CancellationToken cancellationToken)
+    {
+        switch (arguments.Trim().ToLowerInvariant())
+        {
+            case "":
+            case "refresh":
+                await HandleSessionsAsync(message, sender, cancellationToken).ConfigureAwait(false);
+                return;
+            default:
+                await ReplyAsync(sender, message, "Unsupported sessions action.", BuildSessionMenuButtons([]), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
+                return;
+        }
     }
 
     private async Task HandleTopicNewFromMenuAsync(TelegramInboundMessage message, ITelegramBotMessageSender sender, CancellationToken cancellationToken)
@@ -3367,6 +3767,7 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
     {
         await _stateStore.ClearPendingMenuTextInputAsync(conversation, cancellationToken).ConfigureAwait(false);
         await _stateStore.ClearPendingProjectAddPickerAsync(conversation, cancellationToken).ConfigureAwait(false);
+        await _stateStore.ClearPendingGitBranchPickerAsync(conversation, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task ReplyAsync(
@@ -3535,17 +3936,211 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
     private static string BuildNotRoutedMessage(TelegramInboundMessage message)
         => TelegramRoutingPolicy.BuildNotRoutedMessage(message.ChatType);
 
-    private static string BuildMenuText()
-        => string.Join(Environment.NewLine, [
-            "Menu:",
-            "Use the buttons below to open the main Telegram controls."
-        ]);
+    private async Task<string> BuildMenuTextAsync(TelegramConversationScope conversation, CancellationToken cancellationToken)
+    {
+        List<string> lines =
+        [
+            "📋 Menu",
+        ];
+
+        try
+        {
+            IReadOnlyList<ProjectChoice> projects = await ListProjectChoicesAsync(cancellationToken).ConfigureAwait(false);
+            string? activeProject = await _stateStore.GetActiveProjectWorkingDirectoryAsync(conversation, cancellationToken).ConfigureAwait(false);
+            ProjectChoice? project = string.IsNullOrWhiteSpace(activeProject)
+                ? null
+                : projects.FirstOrDefault(candidate => PathComparer.Equals(candidate.WorkingDirectory, activeProject));
+
+            lines.Add(project is null
+                ? "📁 Project: <none>"
+                : $"📁 Project: {project.Name}");
+
+            if (project is not null)
+            {
+                try
+                {
+                    GitRepositoryMenuState gitState = await _gitUtilityService.GetMenuStateAsync(project.WorkingDirectory, cancellationToken).ConfigureAwait(false);
+                    lines.Add($"🌿 Branch: {gitState.Branch}");
+                }
+                catch
+                {
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            lines.Add($"📁 Project: unavailable ({exception.Message})");
+        }
+
+        try
+        {
+            IReadOnlyCollection<CodexSessionSummary> sessions = await _sessionManager.ListSessionsAsync(cancellationToken).ConfigureAwait(false);
+            string? activeSessionId = await _stateStore.GetActiveSessionIdAsync(conversation, cancellationToken).ConfigureAwait(false);
+            CodexSessionSummary? activeSession = string.IsNullOrWhiteSpace(activeSessionId)
+                ? null
+                : sessions.FirstOrDefault(session => string.Equals(session.Id, activeSessionId, StringComparison.OrdinalIgnoreCase));
+
+            lines.Add(activeSession is null
+                ? "💬 Session: <none>"
+                : $"💬 Session: {activeSession.Name} ({FormatStatusValue(activeSession.Status)}, {FormatRelativeAge(activeSession.LastActivityUtc)})");
+        }
+        catch (Exception exception)
+        {
+            lines.Add($"💬 Session: unavailable ({exception.Message})");
+        }
+
+        try
+        {
+            string? activeProject = await _stateStore.GetActiveProjectWorkingDirectoryAsync(conversation, cancellationToken).ConfigureAwait(false);
+            IReadOnlyList<string> runningDirectories = await _devUtilityService.ListRunningProjectDirectoriesAsync(cancellationToken).ConfigureAwait(false);
+            AppendMenuAppServerLines(lines, runningDirectories, activeProject);
+        }
+        catch (Exception exception)
+        {
+            lines.Add($"🖥️ App server: unavailable ({exception.Message})");
+        }
+
+        try
+        {
+            TailscaleServeMenuState state = await _tailscaleServeUtilityService.GetMenuStateAsync(cancellationToken).ConfigureAwait(false);
+            AppendMenuTailscaleLines(lines, state);
+        }
+        catch (Exception exception)
+        {
+            lines.Add($"🔗 Tailscale: unavailable ({exception.Message})");
+        }
+
+        lines.Add("👇 Use the buttons below to open the main Telegram controls.");
+        return string.Join(Environment.NewLine, lines);
+    }
 
     private static string BuildHelpMenuText()
         => string.Join(Environment.NewLine, [
             "Help:",
             "Choose a category for a short command guide, or open the full command reference."
         ]);
+
+    private static string FormatGitMenu(GitRepositoryMenuState state)
+    {
+        List<string> lines =
+        [
+            "🌿 Git",
+            $"📁 Project: {state.ProjectName}",
+            $"📂 Repo root: {state.RepositoryRootName}",
+            $"🌿 Branch: {state.Branch}",
+            $"📄 Status: {state.StatusSummary}",
+            $"🧭 State: {(state.IsClean ? "clean" : "dirty")}",
+        ];
+
+        if (state.AheadCount > 0 || state.BehindCount > 0)
+        {
+            List<string> parts = [];
+            if (state.AheadCount > 0)
+            {
+                parts.Add($"⬆️ {state.AheadCount.ToString(CultureInfo.InvariantCulture)}");
+            }
+
+            if (state.BehindCount > 0)
+            {
+                parts.Add($"⬇️ {state.BehindCount.ToString(CultureInfo.InvariantCulture)}");
+            }
+
+            lines.Add($"🧮 Sync: {string.Join(", ", parts)}");
+        }
+
+        if (state.IsDetached)
+        {
+            lines.Add("⚠️ Detached HEAD");
+        }
+
+        lines.Add($"🔗 Remote: {FormatValue(state.RemoteName)}");
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static string FormatGitBranchMenu(GitBranchMenuState state)
+    {
+        List<string> lines =
+        [
+            $"🌿 Current branch: {state.CurrentBranch}",
+            $"📁 Project: {state.ProjectName}",
+        ];
+        if (state.IsDetached)
+        {
+            lines.Add("⚠️ Detached HEAD");
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static void AppendMenuAppServerLines(List<string> lines, IReadOnlyList<string> runningDirectories, string? activeProject)
+    {
+        if (runningDirectories.Count == 0)
+        {
+            lines.Add("🖥️ App server: <none>");
+            return;
+        }
+
+        List<string> orderedDirectories = runningDirectories
+            .Distinct(PathComparer)
+            .OrderBy(directory => PathComparer.Equals(directory, activeProject) ? 0 : 1)
+            .ThenBy(directory => directory, PathComparer)
+            .ToList();
+
+        if (orderedDirectories.Count == 1)
+        {
+            lines.Add($"🖥️ App server: {FormatMenuAppServerEntry(orderedDirectories[0], activeProject)}");
+            return;
+        }
+
+        lines.Add($"🖥️ App server: {orderedDirectories.Count.ToString(CultureInfo.InvariantCulture)} running");
+        foreach (string directory in orderedDirectories)
+        {
+            lines.Add($"- {FormatMenuAppServerEntry(directory, activeProject)}");
+        }
+    }
+
+    private static string FormatMenuAppServerEntry(string workingDirectory, string? activeProject)
+    {
+        string name = CodexTextFormatting.ResolveProjectName(workingDirectory);
+        return PathComparer.Equals(workingDirectory, activeProject)
+            ? $"{name} (active project)"
+            : name;
+    }
+
+    private static void AppendMenuTailscaleLines(List<string> lines, TailscaleServeMenuState state)
+    {
+        IReadOnlyList<TailscaleServeEntryState> activeEntries = state.Entries
+            .Where(entry => entry.Enabled)
+            .OrderBy(entry => entry.Port)
+            .ToArray();
+
+        if (activeEntries.Count == 0)
+        {
+            lines.Add("🔗 Tailscale: <none>");
+            return;
+        }
+
+        if (activeEntries.Count == 1)
+        {
+            lines.Add($"🔗 Tailscale: {FormatMenuTailscaleEntry(activeEntries[0])}");
+            return;
+        }
+
+        lines.Add($"🔗 Tailscale: {activeEntries.Count.ToString(CultureInfo.InvariantCulture)} active");
+        foreach (TailscaleServeEntryState entry in activeEntries)
+        {
+            lines.Add($"- {FormatMenuTailscaleEntry(entry)}");
+        }
+    }
+
+    private static string FormatMenuTailscaleEntry(TailscaleServeEntryState entry)
+    {
+        string name = string.Equals(entry.Name, entry.Port.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
+            ? string.Empty
+            : $" ({entry.Name})";
+        string url = string.IsNullOrWhiteSpace(entry.TailscaleUrl) ? entry.LocalUrl : entry.TailscaleUrl;
+        return $"{entry.Port.ToString(CultureInfo.InvariantCulture)}{name} -> {url}";
+    }
 
     private static string BuildHelpCategoryText(string category)
         => category switch
@@ -3740,6 +4335,8 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
                     : $"{entry.Name} ({entry.Port.ToString(CultureInfo.InvariantCulture)})";
                 lines.Add($"{emoji} {label}");
             }
+
+            lines.Add("ℹ️ Disable turns off the current root Serve route.");
         }
 
         if (!string.IsNullOrWhiteSpace(state.Hostname))
@@ -4790,11 +5387,16 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
         }
 
         List<IReadOnlyList<TelegramReplyButton>> rows = [];
+        IReadOnlyList<string> labels = BuildDistinctButtonLabels(sessions.Select(session => CodexTextFormatting.ResolveProjectName(session.WorkingDirectory)));
         for (int index = 0; index < sessions.Count; index++)
         {
             CodexSessionSummary session = sessions[index];
-            string suffix = sessions.Count == 1 ? string.Empty : $" {(index + 1).ToString(CultureInfo.InvariantCulture)}";
-            AddButtonToGrid(rows, new TelegramReplyButton($"Use{suffix}", $"use:{session.Id}"));
+            rows.Add(
+            [
+                new TelegramReplyButton(labels[index], $"use:{session.Id}"),
+                new TelegramReplyButton("⛔ Stop", $"stop:{session.Id}"),
+                new TelegramReplyButton("🗑 Delete", $"delete:{session.Id}")
+            ]);
         }
 
         return rows;
@@ -4803,16 +5405,19 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
     internal static IReadOnlyList<IReadOnlyList<TelegramReplyButton>> BuildNavigationButtons()
         => [
             [
-                new TelegramReplyButton("Codex Sessions", "nav:sessions"),
-                new TelegramReplyButton("Projects", "nav:projects")
+                new TelegramReplyButton("🤖 Codex Sessions", "nav:sessions"),
+                new TelegramReplyButton("📁 Projects", "nav:projects")
             ],
             [
-                new TelegramReplyButton("Next App Server", "nav:dev"),
-                new TelegramReplyButton("Tailscale", "nav:tailscale")
+                new TelegramReplyButton("🚀 Next App Server", "nav:dev"),
+                new TelegramReplyButton("🌐 Tailscale", "nav:tailscale")
             ],
             [
-                new TelegramReplyButton("🛑 Stop AI", "stopai:current"),
-                new TelegramReplyButton("Help", "nav:help")
+                new TelegramReplyButton("🌿 Git", "nav:git"),
+                new TelegramReplyButton("❓ Help", "nav:help")
+            ],
+            [
+                new TelegramReplyButton("🛑 Stop AI", "stopai:current")
             ]
         ];
 
@@ -4822,30 +5427,52 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
     internal static IReadOnlyList<IReadOnlyList<TelegramReplyButton>> BuildHelpMenuButtons()
         => [
             [
-                new TelegramReplyButton("Codex Sessions", "helpcat:sessions"),
-                new TelegramReplyButton("Projects", "helpcat:projects")
+                new TelegramReplyButton("🤖 Codex Sessions", "helpcat:sessions"),
+                new TelegramReplyButton("📁 Projects", "helpcat:projects")
             ],
             [
-                new TelegramReplyButton("Next App Server", "helpcat:dev"),
-                new TelegramReplyButton("Tailscale", "helpcat:tailscale")
+                new TelegramReplyButton("🚀 Next App Server", "helpcat:dev"),
+                new TelegramReplyButton("🌐 Tailscale", "helpcat:tailscale")
             ],
             [
-                new TelegramReplyButton("Codex", "helpcat:codex"),
-                new TelegramReplyButton("Admin/Debug", "helpcat:admin")
+                new TelegramReplyButton("🤖 Codex", "helpcat:codex"),
+                new TelegramReplyButton("🛠 Admin/Debug", "helpcat:admin")
             ],
             [
-                new TelegramReplyButton("Full Command Reference", "helpfull:all"),
-                new TelegramReplyButton("Back", "menuback:menu")
+                new TelegramReplyButton("📚 Full Command Reference", "helpfull:all"),
+                new TelegramReplyButton("⬅ Back", "menuback:menu")
             ]
         ];
 
     internal static IReadOnlyList<IReadOnlyList<TelegramReplyButton>> BuildDevMenuButtons()
         => [
-            [new TelegramReplyButton("▶ Start", "dev:start"), new TelegramReplyButton("⛔ Stop", "dev:stop")],
-            [new TelegramReplyButton("🔄 Restart", "dev:restart"), new TelegramReplyButton("🌐 Preview", "dev:preview")],
-            [new TelegramReplyButton("📜 Logs", "dev:logs"), new TelegramReplyButton("📊 Status", "dev:status")],
-            [new TelegramReplyButton("Back", "menuback:menu")]
+            [new TelegramReplyButton("▶ Start", "dev:start"), new TelegramReplyButton("⏹ Stop", "dev:stop")],
+            [new TelegramReplyButton("📜 Logs", "dev:logs"), new TelegramReplyButton("🌐 Tailscale", "nav:tailscale")],
+            [new TelegramReplyButton("🧹 Kill Dev Ports", "dev:killports"), new TelegramReplyButton("⬅ Back", "menuback:menu")],
         ];
+
+    internal static IReadOnlyList<IReadOnlyList<TelegramReplyButton>> BuildGitMenuButtons()
+        => [
+            [new TelegramReplyButton("📊 Status", "git:status"), new TelegramReplyButton("📄 Diff", "git:diff")],
+            [new TelegramReplyButton("✅ Commit", "git:commit"), new TelegramReplyButton("⬆️ Push", "git:push")],
+            [new TelegramReplyButton("⬇️ Pull", "git:pull"), new TelegramReplyButton("🌿 Branch", "git:branch")],
+            [new TelegramReplyButton("🔄 Refresh", "git:refresh"), new TelegramReplyButton("⬅ Back", "menuback:menu")]
+        ];
+
+    private static IReadOnlyList<IReadOnlyList<TelegramReplyButton>> BuildGitBranchMenuButtons(GitBranchMenuState state, PendingGitBranchPickerState picker)
+    {
+        List<IReadOnlyList<TelegramReplyButton>> rows = [];
+        foreach (PendingGitBranchChoiceState branch in picker.Branches)
+        {
+            string label = string.Equals(branch.BranchName, state.CurrentBranch, StringComparison.Ordinal)
+                ? $"{NormalizeButtonLabel(branch.BranchName)} ✅"
+                : NormalizeButtonLabel(branch.BranchName);
+            AddButtonToGrid(rows, new TelegramReplyButton(label, $"gitco:{branch.Key}"));
+        }
+
+        rows.Add([new TelegramReplyButton("🔄 Refresh", "gitbranch:refresh"), new TelegramReplyButton("⬅ Back", "menuback:git")]);
+        return rows;
+    }
 
     private static IReadOnlyList<IReadOnlyList<TelegramReplyButton>> BuildDevProjectButtons(string action, IReadOnlyList<DevTargetChoice> targets)
     {
@@ -4858,7 +5485,7 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
         }
 
         AddButtonToGrid(rows, new TelegramReplyButton("✍️ Enter Folder/Path", $"devmanual:{action}"));
-        rows.Add([new TelegramReplyButton("Back", "menuback:dev")]);
+        rows.Add([new TelegramReplyButton("⬅ Back", "menuback:dev")]);
         return rows;
     }
 
@@ -4868,13 +5495,13 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
         foreach (TailscaleServeEntryState entry in state.Entries)
         {
             string label = string.Equals(entry.Name, entry.Port.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
-                ? $"Toggle {entry.Port.ToString(CultureInfo.InvariantCulture)}"
-                : $"Toggle {entry.Name} ({entry.Port.ToString(CultureInfo.InvariantCulture)})";
+                ? $"🎚️ {entry.Port.ToString(CultureInfo.InvariantCulture)}"
+                : $"🎚️ {entry.Name} ({entry.Port.ToString(CultureInfo.InvariantCulture)})";
             AddButtonToGrid(rows, new TelegramReplyButton(label, $"tsp:{entry.Port}"));
         }
 
-        rows.Add([new TelegramReplyButton("Custom Port", "tscustom:port"), new TelegramReplyButton("Reset All Serve Routes", "tsreset:all")]);
-        rows.Add([new TelegramReplyButton("Back", "menuback:menu")]);
+        rows.Add([new TelegramReplyButton("🔢 Custom Port", "tscustom:port"), new TelegramReplyButton("♻️ Reset All Serve Routes", "tsreset:all")]);
+        rows.Add([new TelegramReplyButton("⬅ Back", "menuback:menu")]);
         return rows;
     }
 
@@ -4987,61 +5614,65 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
     private static IReadOnlyList<IReadOnlyList<TelegramReplyButton>> BuildSessionMenuButtons(IReadOnlyList<CodexSessionSummary> sessions)
     {
         List<IReadOnlyList<TelegramReplyButton>> rows = BuildSessionButtons(sessions)?.ToList() ?? [];
-        rows.Add([new TelegramReplyButton("➕ New Session", "newsession:start"), new TelegramReplyButton("🛑 Stop AI", "stopai:current")]);
-        rows.Add([new TelegramReplyButton("Back", "menuback:menu")]);
+        rows.Add([new TelegramReplyButton("➕ New Session", "newsession:start"), new TelegramReplyButton("🔄 Refresh", "sessions:refresh")]);
+        rows.Add([new TelegramReplyButton("🛑 Stop AI", "stopai:current")]);
+        rows.Add([new TelegramReplyButton("⬅ Back", "menuback:menu")]);
         return rows;
     }
 
     private static IReadOnlyList<IReadOnlyList<TelegramReplyButton>> BuildProjectMenuButtons(IReadOnlyList<ProjectChoice> projects)
     {
         List<IReadOnlyList<TelegramReplyButton>> rows = [];
+        IReadOnlyList<string> labels = BuildDistinctButtonLabels(projects.Select(project => project.Name));
         for (int index = 0; index < projects.Count; index++)
         {
             ProjectChoice project = projects[index];
-            string suffix = projects.Count == 1 ? string.Empty : $" {(index + 1).ToString(CultureInfo.InvariantCulture)}";
-            AddButtonToGrid(rows, new TelegramReplyButton($"Use{suffix}", $"project:{project.Key}"));
+            AddButtonToGrid(rows, new TelegramReplyButton(labels[index], $"project:{project.Key}"));
         }
 
         rows.Add([new TelegramReplyButton("➕ Add Project", "projectadd:start")]);
-        rows.Add([new TelegramReplyButton("Back", "menuback:menu")]);
+        rows.Add([new TelegramReplyButton("⬅ Back", "menuback:menu")]);
         return rows;
     }
 
     private static IReadOnlyList<IReadOnlyList<TelegramReplyButton>> BuildNewSessionProjectButtons(IReadOnlyList<ProjectChoice> projects)
     {
         List<IReadOnlyList<TelegramReplyButton>> rows = [];
+        IReadOnlyList<string> labels = BuildDistinctButtonLabels(projects.Select(project => project.Name));
         for (int index = 0; index < projects.Count; index++)
         {
             ProjectChoice project = projects[index];
-            string suffix = projects.Count == 1 ? string.Empty : $" {(index + 1).ToString(CultureInfo.InvariantCulture)}";
-            AddButtonToGrid(rows, new TelegramReplyButton($"Choose{suffix}", $"newsessionproj:{project.Key}"));
+            AddButtonToGrid(rows, new TelegramReplyButton(labels[index], $"newsessionproj:{project.Key}"));
         }
 
-        rows.Add([new TelegramReplyButton("Back", "menuback:sessions")]);
+        rows.Add([new TelegramReplyButton("⬅ Back", "menuback:sessions")]);
         return rows;
     }
 
     private static IReadOnlyList<IReadOnlyList<TelegramReplyButton>> BuildProjectAddPickerButtons(IReadOnlyList<ProjectChoice> projects)
     {
         List<IReadOnlyList<TelegramReplyButton>> rows = [];
+        IReadOnlyList<string> labels = BuildDistinctButtonLabels(projects.Select(project => project.Name));
         for (int index = 0; index < projects.Count; index++)
         {
             ProjectChoice project = projects[index];
-            string suffix = projects.Count == 1 ? string.Empty : $" {(index + 1).ToString(CultureInfo.InvariantCulture)}";
-            AddButtonToGrid(rows, new TelegramReplyButton($"Choose{suffix}", $"projectaddpick:{project.Key}"));
+            AddButtonToGrid(rows, new TelegramReplyButton(labels[index], $"projectaddpick:{project.Key}"));
         }
 
-        rows.Add([new TelegramReplyButton("Back", "menuback:projects")]);
+        rows.Add([new TelegramReplyButton("⬅ Back", "menuback:projects")]);
         return rows;
     }
 
     private static IReadOnlyList<IReadOnlyList<TelegramReplyButton>> BuildPromptButtons(string backTarget)
-        => [[new TelegramReplyButton("Back", $"menuback:{backTarget}")]];
+        => [[new TelegramReplyButton("⬅ Back", $"menuback:{backTarget}")]];
+
+    private static IReadOnlyList<IReadOnlyList<TelegramReplyButton>> BuildBackButtons(string backTarget)
+        => BuildPromptButtons(backTarget);
 
     private static IReadOnlyList<IReadOnlyList<TelegramReplyButton>> BuildProjectAddPromptButtons()
         => [
             [new TelegramReplyButton("➕ Add Project", "projectadd:start")],
-            [new TelegramReplyButton("Back", "menuback:projects")]
+            [new TelegramReplyButton("⬅ Back", "menuback:projects")]
         ];
 
     private static void AddButtonToGrid(List<IReadOnlyList<TelegramReplyButton>> rows, TelegramReplyButton button)
@@ -5055,6 +5686,60 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
         }
 
         rows.Add([button]);
+    }
+
+    private static PendingGitBranchPickerState BuildGitBranchPickerState(GitBranchMenuState state)
+    {
+        List<PendingGitBranchChoiceState> branches = state.LocalBranches
+            .Select((branch, index) => new PendingGitBranchChoiceState(
+                $"b{index.ToString(CultureInfo.InvariantCulture)}",
+                branch))
+            .ToList();
+        return new PendingGitBranchPickerState(state.WorkingDirectory, branches, DateTimeOffset.UtcNow);
+    }
+
+    private static IReadOnlyList<IReadOnlyList<TelegramReplyButton>> BuildDeleteConfirmationButtons(string sessionId)
+        => [
+            [
+                new TelegramReplyButton("🗑 Confirm Delete", $"deleteconfirm:{sessionId}"),
+                new TelegramReplyButton("⬅ Back", "menuback:sessions")
+            ]
+        ];
+
+    private static IReadOnlyList<string> BuildDistinctButtonLabels(IEnumerable<string?> rawLabels)
+    {
+        List<string> normalizedLabels = rawLabels
+            .Select(static label => NormalizeButtonLabel(label))
+            .ToList();
+        Dictionary<string, int> totals = normalizedLabels
+            .GroupBy(static label => label, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(static group => group.Key, static group => group.Count(), StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, int> seen = new(StringComparer.OrdinalIgnoreCase);
+        List<string> labels = [];
+
+        foreach (string label in normalizedLabels)
+        {
+            if (!totals.TryGetValue(label, out int total) || total <= 1)
+            {
+                labels.Add(label);
+                continue;
+            }
+
+            int current = seen.TryGetValue(label, out int count) ? count + 1 : 1;
+            seen[label] = current;
+            labels.Add($"{label} {current.ToString(CultureInfo.InvariantCulture)}");
+        }
+
+        return labels;
+    }
+
+    private static string NormalizeButtonLabel(string? label)
+    {
+        string normalized = string.IsNullOrWhiteSpace(label)
+            ? "Default project"
+            : label.Trim();
+
+        return normalized.Length <= 64 ? normalized : normalized[..64].TrimEnd();
     }
 
     private static ResolvedProject ResolveProject(IReadOnlyList<ProjectChoice> projects, string arguments)

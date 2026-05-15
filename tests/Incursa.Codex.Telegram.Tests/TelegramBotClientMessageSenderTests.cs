@@ -43,7 +43,7 @@ public sealed class TelegramBotClientMessageSenderTests
             NullLogger<TelegramBotClientMessageSender>.Instance,
             client);
 
-        await sender.SendTextMessageAsync(new TelegramConversationScope(1234, null), "ignored", CancellationToken.None);
+        await sender.SendTextMessageAsync(new TelegramConversationScope(1234, null), "ignored", null, CancellationToken.None);
 
         Assert.Empty(client.SentMessages);
     }
@@ -430,6 +430,7 @@ public sealed class TelegramBotClientMessageSenderTests
             () => sender.SendTextMessageAsync(
                 new TelegramConversationScope(-100123456, 55),
                 "topic-scoped Codex output",
+                null,
                 CancellationToken.None));
 
         Assert.IsType<ApiRequestException>(exception.InnerException);
@@ -449,6 +450,7 @@ public sealed class TelegramBotClientMessageSenderTests
             () => sender.SendTextMessageAsync(
                 new TelegramConversationScope(-100123456, null),
                 "main chat Codex output",
+                null,
                 CancellationToken.None));
 
         Assert.Contains("topic was closed", exception.Message);
@@ -470,6 +472,7 @@ public sealed class TelegramBotClientMessageSenderTests
             () => sender.SendTextMessageAsync(
                 new TelegramConversationScope(1234, null),
                 "rate limited output",
+                null,
                 CancellationToken.None));
 
         Assert.Equal(TimeSpan.FromSeconds(7), exception.RetryAfter);
@@ -489,6 +492,7 @@ public sealed class TelegramBotClientMessageSenderTests
             () => sender.SendTextMessageAsync(
                 new TelegramConversationScope(1234, null),
                 "rate limited output",
+                null,
                 CancellationToken.None));
 
         Assert.Null(exception.RetryAfter);
@@ -509,6 +513,7 @@ public sealed class TelegramBotClientMessageSenderTests
             () => sender.SendTextMessageAsync(
                 new TelegramConversationScope(1234, null),
                 "rate limited output",
+                null,
                 CancellationToken.None));
 
         Assert.Null(exception.RetryAfter);

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text;
 using Incursa.Codex.Telegram.Models;
 using Incursa.Codex.Telegram.Options;
+using Incursa.Codex.Telegram.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -40,6 +41,9 @@ internal sealed class TelegramTurnOutputRelay : ITelegramTurnOutputRelay
     private readonly ITelegramThreadFollowRegistry _followRegistry;
     private readonly ITelegramTurnReactionRegistry _reactionRegistry;
     private readonly ITelegramBotMessageSender _messageSender;
+    private readonly ICodexThreadManifestStore _manifestStore;
+    private readonly IGitUtilityService _gitUtilityService;
+    private readonly IDevUtilityService _devUtilityService;
     private readonly TelegramOutboundOptions _options;
     private readonly ILogger<TelegramTurnOutputRelay> _logger;
 
@@ -50,6 +54,9 @@ internal sealed class TelegramTurnOutputRelay : ITelegramTurnOutputRelay
     /// <param name="followRegistry">Registry of Telegram conversations following Codex threads.</param>
     /// <param name="reactionRegistry">Registry that maps Codex turns back to their source Telegram messages for reactions.</param>
     /// <param name="messageSender">Telegram sender used for best-effort message reactions.</param>
+    /// <param name="manifestStore">Store used to read thread working-directory context.</param>
+    /// <param name="gitUtilityService">Git service used to derive lightweight post-turn actions.</param>
+    /// <param name="devUtilityService">Dev service used to detect running app servers for post-turn actions.</param>
     /// <param name="options">Outbound delivery options.</param>
     /// <param name="logger">Logger for enqueue failures.</param>
     public TelegramTurnOutputRelay(
@@ -57,6 +64,9 @@ internal sealed class TelegramTurnOutputRelay : ITelegramTurnOutputRelay
         ITelegramThreadFollowRegistry followRegistry,
         ITelegramTurnReactionRegistry reactionRegistry,
         ITelegramBotMessageSender messageSender,
+        ICodexThreadManifestStore manifestStore,
+        IGitUtilityService gitUtilityService,
+        IDevUtilityService devUtilityService,
         IOptions<TelegramOutboundOptions> options,
         ILogger<TelegramTurnOutputRelay> logger)
     {
@@ -64,6 +74,9 @@ internal sealed class TelegramTurnOutputRelay : ITelegramTurnOutputRelay
         _followRegistry = followRegistry;
         _reactionRegistry = reactionRegistry;
         _messageSender = messageSender;
+        _manifestStore = manifestStore;
+        _gitUtilityService = gitUtilityService;
+        _devUtilityService = devUtilityService;
         _options = options.Value;
         _logger = logger;
     }
@@ -133,6 +146,11 @@ internal sealed class TelegramTurnOutputRelay : ITelegramTurnOutputRelay
         if (isTerminal)
         {
             await ReactToTerminalTurnAsync(entry, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (string.Equals(entry.Type, TurnCompletedType, StringComparison.OrdinalIgnoreCase))
+        {
+            await PublishPostTurnActionMenuAsync(entry, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -257,6 +275,17 @@ internal sealed class TelegramTurnOutputRelay : ITelegramTurnOutputRelay
         CodexOutboundMessageKind kind,
         OutboundPriority priority,
         CancellationToken cancellationToken)
+        => await PublishTextAsync(threadId, turnId, eventType, text, kind, priority, null, cancellationToken).ConfigureAwait(false);
+
+    private async Task PublishTextAsync(
+        string threadId,
+        string? turnId,
+        string eventType,
+        string text,
+        CodexOutboundMessageKind kind,
+        OutboundPriority priority,
+        IReadOnlyList<IReadOnlyList<TelegramReplyButton>>? buttons,
+        CancellationToken cancellationToken)
     {
         IReadOnlyCollection<TelegramConversationScope> targets = _followRegistry.GetTargets(threadId);
         if (targets.Count == 0)
@@ -278,6 +307,7 @@ internal sealed class TelegramTurnOutputRelay : ITelegramTurnOutputRelay
                         TurnId = string.IsNullOrWhiteSpace(turnId) ? null : turnId,
                         Kind = kind,
                         Text = text,
+                        Buttons = buttons,
                         CreatedUtc = DateTimeOffset.UtcNow,
                         Priority = priority,
                     },
@@ -289,6 +319,77 @@ internal sealed class TelegramTurnOutputRelay : ITelegramTurnOutputRelay
             }
         }
     }
+
+    private async Task PublishPostTurnActionMenuAsync(CodexTimelineEntryVm entry, CancellationToken cancellationToken)
+    {
+        TelegramPostTurnActionMenu menu = await BuildPostTurnActionMenuAsync(entry.ThreadId!, cancellationToken).ConfigureAwait(false);
+        await PublishTextAsync(
+            entry.ThreadId!,
+            entry.TurnId,
+            entry.Type + ".actions",
+            menu.Text,
+            CodexOutboundMessageKind.System,
+            OutboundPriority.High,
+            menu.Buttons,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<TelegramPostTurnActionMenu> BuildPostTurnActionMenuAsync(string threadId, CancellationToken cancellationToken)
+    {
+        string? workingDirectory = null;
+        try
+        {
+            CodexThreadManifestRecord? manifest = await _manifestStore.ReadAsync(threadId, cancellationToken).ConfigureAwait(false);
+            workingDirectory = string.IsNullOrWhiteSpace(manifest?.WorkingDirectory) ? null : manifest.WorkingDirectory;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogDebug(exception, "Skipping manifest lookup for post-turn actions on thread {ThreadId}.", threadId);
+        }
+
+        TelegramPostTurnActionMenuContext context = await BuildPostTurnActionMenuContextAsync(workingDirectory, cancellationToken).ConfigureAwait(false);
+        return TelegramPostTurnActionMenuFactory.BuildCompletedTurnMenu(context);
+    }
+
+    private async Task<TelegramPostTurnActionMenuContext> BuildPostTurnActionMenuContextAsync(
+        string? workingDirectory,
+        CancellationToken cancellationToken)
+    {
+        bool hasGitRepository = false;
+        bool hasGitChanges = false;
+        bool canPush = false;
+        bool isDevServerRunning = false;
+
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            try
+            {
+                GitRepositoryMenuState gitState = await _gitUtilityService.GetMenuStateAsync(workingDirectory, cancellationToken).ConfigureAwait(false);
+                hasGitRepository = true;
+                hasGitChanges = !gitState.IsClean;
+                canPush = !string.IsNullOrWhiteSpace(gitState.RemoteName);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogDebug(exception, "Skipping Git state lookup for post-turn actions in {WorkingDirectory}.", workingDirectory);
+            }
+
+            try
+            {
+                IReadOnlyList<string> runningDirectories = await _devUtilityService.ListRunningProjectDirectoriesAsync(cancellationToken).ConfigureAwait(false);
+                isDevServerRunning = runningDirectories.Contains(workingDirectory, ResolvePathComparer());
+            }
+            catch (Exception exception)
+            {
+                _logger.LogDebug(exception, "Skipping dev-server lookup for post-turn actions in {WorkingDirectory}.", workingDirectory);
+            }
+        }
+
+        return new TelegramPostTurnActionMenuContext(workingDirectory, hasGitRepository, hasGitChanges, canPush, isDevServerRunning);
+    }
+
+    private static StringComparer ResolvePathComparer()
+        => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
     private static string? FormatEntry(CodexTimelineEntryVm entry, string? bufferedAgentMessage)
         => FormatEntry(entry, bufferedAgentMessage is null ? null : new AgentMessageFlush(bufferedAgentMessage, bufferedAgentMessage, false));

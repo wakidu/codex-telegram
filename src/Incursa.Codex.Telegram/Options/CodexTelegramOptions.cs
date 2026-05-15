@@ -189,7 +189,7 @@ public sealed class DevUtilityOptions
     /// <summary>
     /// Gets or sets the default dev command used when a project does not override it.
     /// </summary>
-    public string DefaultCommand { get; set; } = "npm run dev";
+    public string DefaultCommand { get; set; } = "npm run dev -- --hostname 0.0.0.0";
 
     /// <summary>
     /// Gets or sets the default relative log file path used when a project does not override it.

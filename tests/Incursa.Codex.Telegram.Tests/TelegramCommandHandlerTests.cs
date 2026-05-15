@@ -69,8 +69,10 @@ public sealed class TelegramCommandHandlerTests
     public async Task HandleMessageAsync_SessionsListUsesOnlyUseSelectionButtons()
     {
         using CommandHandlerHarness harness = CommandHandlerHarness.Create();
-        harness.SessionManager.Sessions.Add(CreateSession("thread-1", "First session", harness.Temp.Path));
-        harness.SessionManager.Sessions.Add(CreateSession("thread-2", "Second session", harness.Temp.Path));
+        string firstProjectPath = harness.Temp.CreateDirectory("repo-one");
+        string secondProjectPath = harness.Temp.CreateDirectory("repo-two");
+        harness.SessionManager.Sessions.Add(CreateSession("thread-1", "First session", firstProjectPath));
+        harness.SessionManager.Sessions.Add(CreateSession("thread-2", "Second session", secondProjectPath));
         await harness.StateStore.TrackSessionAsync("thread-1", CancellationToken.None);
         await harness.StateStore.TrackSessionAsync("thread-2", CancellationToken.None);
 
@@ -80,7 +82,7 @@ public sealed class TelegramCommandHandlerTests
             CancellationToken.None);
 
         SentTelegramMessage sent = Assert.Single(harness.Sender.Sent);
-        Assert.Equal(["Use 1", "Use 2", "➕ New Session", "🛑 Stop AI", "Back"], FlattenButtonLabels(sent));
+        Assert.Equal(["repo-one", "⛔ Stop", "🗑 Delete", "repo-two", "⛔ Stop", "🗑 Delete", "➕ New Session", "🔄 Refresh", "🛑 Stop AI", "⬅ Back"], FlattenButtonLabels(sent));
         Assert.DoesNotContain(FlattenButtonLabels(sent), label => IsSessionControlLabel(label));
     }
 
@@ -413,7 +415,7 @@ public sealed class TelegramCommandHandlerTests
         Assert.Equal(projectPath, request.WorkingDirectory);
         Assert.Contains("Created and selected Release smoke.", sent.Text);
         AssertCompactUsageSummary(sent.Text);
-        Assert.Equal(["Codex Sessions", "Projects", "Next App Server", "Tailscale", "🛑 Stop AI", "Help"], FlattenButtonLabels(sent));
+        Assert.Equal(["🤖 Codex Sessions", "📁 Projects", "🚀 Next App Server", "🌐 Tailscale", "🌿 Git", "❓ Help", "🛑 Stop AI"], FlattenButtonLabels(sent));
         Assert.DoesNotContain(FlattenButtonLabels(sent), label => IsSessionControlLabel(label));
         Assert.DoesNotContain(FlattenButtonLabels(sent), label => label.StartsWith("Use", StringComparison.OrdinalIgnoreCase));
     }
@@ -456,7 +458,7 @@ public sealed class TelegramCommandHandlerTests
         SentTelegramMessage sent = Assert.Single(harness.Sender.Sent);
         Assert.Contains("Choose a category", sent.Text);
         Assert.DoesNotContain("Commands:", sent.Text);
-        Assert.Equal(["Codex Sessions", "Projects", "Next App Server", "Tailscale", "Codex", "Admin/Debug", "Full Command Reference", "Back"], FlattenButtonLabels(sent));
+        Assert.Equal(["🤖 Codex Sessions", "📁 Projects", "🚀 Next App Server", "🌐 Tailscale", "🤖 Codex", "🛠 Admin/Debug", "📚 Full Command Reference", "⬅ Back"], FlattenButtonLabels(sent));
     }
 
     [Fact]
@@ -470,9 +472,172 @@ public sealed class TelegramCommandHandlerTests
             CancellationToken.None);
 
         SentTelegramMessage sent = Assert.Single(harness.Sender.Sent);
-        Assert.Contains("Menu:", sent.Text);
+        Assert.Contains("📋 Menu", sent.Text);
         Assert.DoesNotContain("Commands:", sent.Text);
-        Assert.Equal(["Codex Sessions", "Projects", "Next App Server", "Tailscale", "🛑 Stop AI", "Help"], FlattenButtonLabels(sent));
+        Assert.Equal(["🤖 Codex Sessions", "📁 Projects", "🚀 Next App Server", "🌐 Tailscale", "🌿 Git", "❓ Help", "🛑 Stop AI"], FlattenButtonLabels(sent));
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_MenuShowsProjectSessionDevServerAndTailscaleSummary()
+    {
+        using CommandHandlerHarness harness = CommandHandlerHarness.Create();
+        string projectPath = harness.Temp.CreateDirectory("repo");
+        TelegramConversationScope conversation = new(5555, null);
+        harness.ProjectCatalog.Projects.Add(new CodexProjectCatalogRecord
+        {
+            WorkingDirectory = projectPath,
+            AddedAt = DateTimeOffset.Parse("2026-05-04T00:00:00Z"),
+        });
+        harness.GitUtilityService.MenuState = new GitRepositoryMenuState("repo", projectPath, "main", "1 modified", "origin", "repo", false, false, 0, 0);
+        harness.SessionManager.Sessions.Add(CreateSession("thread-1", "Demo session", projectPath, CodexSessionStatus.Running));
+        harness.DevUtilityService.RunningDirectories.Add(projectPath);
+        harness.TailscaleServeUtilityService.Hostname = "demo.tailnet.ts.net";
+        harness.TailscaleServeUtilityService.ConfiguredEntries.Add(
+            new TailscaleServeEntryState("web", 3000, true, "http://localhost:3000", "https://demo.tailnet.ts.net/"));
+        await harness.StateStore.SetActiveProjectWorkingDirectoryAsync(conversation, projectPath, CancellationToken.None);
+        await harness.StateStore.SetActiveSessionIdAsync(conversation, "thread-1", CancellationToken.None);
+
+        await harness.Handler.HandleMessageAsync(
+            new TelegramInboundMessage(1234, conversation.ChatId, "private", "/menu"),
+            harness.Sender,
+            CancellationToken.None);
+
+        SentTelegramMessage sent = Assert.Single(harness.Sender.Sent);
+        Assert.Contains("📁 Project: repo", sent.Text);
+        Assert.Contains("🌿 Branch: main", sent.Text);
+        Assert.Contains("💬 Session: Demo session", sent.Text);
+        Assert.Contains("🖥️ App server: repo (active project)", sent.Text);
+        Assert.Contains("🔗 Tailscale: 3000 (web) -> https://demo.tailnet.ts.net/", sent.Text);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_GitMenuShowsCurrentBranch()
+    {
+        using CommandHandlerHarness harness = CommandHandlerHarness.Create();
+        string projectPath = harness.Temp.CreateDirectory("salonup-admin");
+        TelegramConversationScope conversation = new(5555, null);
+        harness.ProjectCatalog.Projects.Add(new CodexProjectCatalogRecord
+        {
+            WorkingDirectory = projectPath,
+            AddedAt = DateTimeOffset.Parse("2026-05-04T00:00:00Z"),
+        });
+        harness.GitUtilityService.MenuState = new GitRepositoryMenuState("salonup-admin", projectPath, "main", "3 modified, 1 untracked", "origin", "salonup-admin", false, false, 2, 1);
+        await harness.StateStore.SetActiveProjectWorkingDirectoryAsync(conversation, projectPath, CancellationToken.None);
+
+        await harness.Handler.HandleMessageAsync(
+            new TelegramInboundMessage(1234, conversation.ChatId, "private", "/git"),
+            harness.Sender,
+            CancellationToken.None);
+
+        SentTelegramMessage sent = Assert.Single(harness.Sender.Sent);
+        Assert.Contains("🌿 Git", sent.Text);
+        Assert.Contains("🌿 Branch: main", sent.Text);
+        Assert.Contains("📂 Repo root: salonup-admin", sent.Text);
+        Assert.Contains("🧭 State: dirty", sent.Text);
+        Assert.Contains("🧮 Sync: ⬆️ 2, ⬇️ 1", sent.Text);
+        Assert.Equal(["📊 Status", "📄 Diff", "✅ Commit", "⬆️ Push", "⬇️ Pull", "🌿 Branch", "🔄 Refresh", "⬅ Back"], FlattenButtonLabels(sent));
+    }
+
+    [Fact]
+    public async Task HandleCallbackAsync_GitCommitFlowUsesSelectedProjectCwd()
+    {
+        using CommandHandlerHarness harness = CommandHandlerHarness.Create();
+        string projectPath = harness.Temp.CreateDirectory("selected-repo");
+        string sessionPath = harness.Temp.CreateDirectory("session-repo");
+        TelegramConversationScope conversation = new(5555, null);
+        harness.ProjectCatalog.Projects.Add(new CodexProjectCatalogRecord
+        {
+            WorkingDirectory = projectPath,
+            AddedAt = DateTimeOffset.Parse("2026-05-04T00:00:00Z"),
+        });
+        harness.SessionManager.Sessions.Add(CreateSession("thread-1", "Demo session", sessionPath, CodexSessionStatus.Running));
+        harness.GitUtilityService.MenuState = new GitRepositoryMenuState("selected-repo", projectPath, "main", "1 modified", "origin", "selected-repo", false, false, 0, 0);
+        await harness.StateStore.SetActiveProjectWorkingDirectoryAsync(conversation, projectPath, CancellationToken.None);
+        await harness.StateStore.SetActiveSessionIdAsync(conversation, "thread-1", CancellationToken.None);
+
+        await harness.Handler.HandleCallbackAsync(
+            new TelegramInboundCallback("callback-git-commit", 1234, conversation.ChatId, "private", "git:commit", SourceMessageId: 150),
+            harness.Sender,
+            CancellationToken.None);
+
+        Assert.Equal("Git.", Assert.Single(harness.Sender.CallbackAnswers).Text);
+        EditedTelegramMessage prompt = Assert.Single(harness.Sender.Edited);
+        Assert.Equal("✍️ Send commit message", prompt.Text);
+
+        harness.Sender.Edited.Clear();
+        harness.Sender.CallbackAnswers.Clear();
+
+        await harness.Handler.HandleMessageAsync(
+            new TelegramInboundMessage(1234, conversation.ChatId, "private", "ship git menu"),
+            harness.Sender,
+            CancellationToken.None);
+
+        Assert.Equal([(projectPath, "ship git menu")], harness.GitUtilityService.CommitRequests);
+        Assert.Empty(harness.SessionManager.SendRequests);
+        SentTelegramMessage result = Assert.Single(harness.Sender.Sent);
+        Assert.Contains("✅ Commit completed.", result.Text);
+        Assert.Contains("🌿 Git", result.Text);
+    }
+
+    [Fact]
+    public async Task HandleCallbackAsync_GitBranchMenuRendersLocalBranches()
+    {
+        using CommandHandlerHarness harness = CommandHandlerHarness.Create();
+        string projectPath = harness.Temp.CreateDirectory("repo");
+        TelegramConversationScope conversation = new(5555, null);
+        harness.ProjectCatalog.Projects.Add(new CodexProjectCatalogRecord
+        {
+            WorkingDirectory = projectPath,
+            AddedAt = DateTimeOffset.Parse("2026-05-04T00:00:00Z"),
+        });
+        harness.GitUtilityService.BranchMenuState = new GitBranchMenuState("repo", projectPath, "main", false, ["main", "dev", "feature/x"]);
+        await harness.StateStore.SetActiveProjectWorkingDirectoryAsync(conversation, projectPath, CancellationToken.None);
+
+        await harness.Handler.HandleCallbackAsync(
+            new TelegramInboundCallback("callback-git-branch", 1234, conversation.ChatId, "private", "git:branch", SourceMessageId: 151),
+            harness.Sender,
+            CancellationToken.None);
+
+        Assert.Equal("Git.", Assert.Single(harness.Sender.CallbackAnswers).Text);
+        EditedTelegramMessage edited = Assert.Single(harness.Sender.Edited);
+        Assert.Contains("🌿 Current branch: main", edited.Text);
+        Assert.Equal(["main ✅", "dev", "feature/x", "🔄 Refresh", "⬅ Back"], FlattenButtonLabels(edited));
+    }
+
+    [Fact]
+    public async Task HandleCallbackAsync_GitCheckoutUsesSelectedBranchKey()
+    {
+        using CommandHandlerHarness harness = CommandHandlerHarness.Create();
+        string projectPath = harness.Temp.CreateDirectory("repo");
+        TelegramConversationScope conversation = new(5555, null);
+        harness.ProjectCatalog.Projects.Add(new CodexProjectCatalogRecord
+        {
+            WorkingDirectory = projectPath,
+            AddedAt = DateTimeOffset.Parse("2026-05-04T00:00:00Z"),
+        });
+        harness.GitUtilityService.BranchMenuState = new GitBranchMenuState("repo", projectPath, "main", false, ["main", "dev"]);
+        harness.GitUtilityService.MenuState = new GitRepositoryMenuState("repo", projectPath, "dev", "clean", "origin", "repo", true, false, 0, 0);
+        harness.GitUtilityService.CheckoutResult = new GitActionResult(true, "🌿 Checked out dev.");
+        await harness.StateStore.SetActiveProjectWorkingDirectoryAsync(conversation, projectPath, CancellationToken.None);
+
+        await harness.Handler.HandleCallbackAsync(
+            new TelegramInboundCallback("callback-git-branch-open", 1234, conversation.ChatId, "private", "git:branch", SourceMessageId: 152),
+            harness.Sender,
+            CancellationToken.None);
+
+        harness.Sender.Edited.Clear();
+        harness.Sender.CallbackAnswers.Clear();
+
+        await harness.Handler.HandleCallbackAsync(
+            new TelegramInboundCallback("callback-git-checkout", 1234, conversation.ChatId, "private", "gitco:b1", SourceMessageId: 153),
+            harness.Sender,
+            CancellationToken.None);
+
+        Assert.Equal("Switching branch.", Assert.Single(harness.Sender.CallbackAnswers).Text);
+        Assert.Equal([(projectPath, "dev")], harness.GitUtilityService.CheckoutRequests);
+        EditedTelegramMessage edited = Assert.Single(harness.Sender.Edited);
+        Assert.Contains("🌿 Checked out dev.", edited.Text);
+        Assert.Contains("🌿 Branch: dev", edited.Text);
     }
 
     [Fact]
@@ -574,7 +739,7 @@ public sealed class TelegramCommandHandlerTests
 
         SentTelegramMessage sent = Assert.Single(harness.Sender.Sent);
         Assert.Contains("Projects:", sent.Text);
-        Assert.Equal(["Use", "➕ Add Project", "Back"], FlattenButtonLabels(sent));
+        Assert.Equal(["repo", "➕ Add Project", "⬅ Back"], FlattenButtonLabels(sent));
     }
 
     [Fact]
@@ -593,7 +758,7 @@ public sealed class TelegramCommandHandlerTests
         SentTelegramMessage sent = Assert.Single(harness.Sender.Sent);
         Assert.Contains("Selected Second session.", sent.Text);
         Assert.Equal("thread-2", await harness.StateStore.GetActiveSessionIdAsync(conversation, CancellationToken.None));
-        Assert.Equal(["Codex Sessions", "Projects", "Next App Server", "Tailscale", "🛑 Stop AI", "Help"], FlattenButtonLabels(sent));
+        Assert.Equal(["🤖 Codex Sessions", "📁 Projects", "🚀 Next App Server", "🌐 Tailscale", "🌿 Git", "❓ Help", "🛑 Stop AI"], FlattenButtonLabels(sent));
     }
 
     [Fact]
@@ -929,10 +1094,9 @@ public sealed class TelegramCommandHandlerTests
     public async Task HandleMessageAsync_SessionsAllShowsRecentHistoryAndLimitGuidance()
     {
         using CommandHandlerHarness harness = CommandHandlerHarness.Create();
-        for (int index = 0; index < 3; index++)
-        {
-            harness.SessionManager.Sessions.Add(CreateSession($"thread-{index}", $"Session {index}", harness.Temp.Path));
-        }
+        harness.SessionManager.Sessions.Add(CreateSession("thread-0", "Session 0", harness.Temp.CreateDirectory("repo-zero")));
+        harness.SessionManager.Sessions.Add(CreateSession("thread-1", "Session 1", harness.Temp.CreateDirectory("repo-one")));
+        harness.SessionManager.Sessions.Add(CreateSession("thread-2", "Session 2", harness.Temp.CreateDirectory("repo-two")));
 
         await harness.Handler.HandleMessageAsync(
             new TelegramInboundMessage(1234, 5555, "private", "/sessions all 2"),
@@ -942,7 +1106,7 @@ public sealed class TelegramCommandHandlerTests
         string text = Assert.Single(harness.Sender.Sent).Text;
         Assert.Contains("Recent Codex Sessions:", text);
         Assert.Contains("Showing 2 of 3", text);
-        Assert.Equal(["Use 1", "Use 2", "➕ New Session", "🛑 Stop AI", "Back"], FlattenButtonLabels(harness.Sender.Sent.Single()));
+        Assert.Equal(["repo-zero", "⛔ Stop", "🗑 Delete", "repo-one", "⛔ Stop", "🗑 Delete", "➕ New Session", "🔄 Refresh", "🛑 Stop AI", "⬅ Back"], FlattenButtonLabels(harness.Sender.Sent.Single()));
     }
 
     [Fact]
@@ -1298,7 +1462,7 @@ public sealed class TelegramCommandHandlerTests
         Assert.Contains("id aaaaaaaa", sent.Text);
         Assert.Contains("first line second line", sent.Text);
         Assert.DoesNotContain("other topic", sent.Text);
-        Assert.Equal(["Send now", "Edit", "Delete", "Codex Sessions", "Projects", "Next App Server", "Tailscale", "🛑 Stop AI", "Help"], FlattenButtonLabels(sent));
+        Assert.Equal(["Send now", "Edit", "Delete", "🤖 Codex Sessions", "📁 Projects", "🚀 Next App Server", "🌐 Tailscale", "🌿 Git", "❓ Help", "🛑 Stop AI"], FlattenButtonLabels(sent));
     }
 
     [Fact]
@@ -1572,7 +1736,7 @@ public sealed class TelegramCommandHandlerTests
         Assert.Equal("Opening menu.", Assert.Single(harness.Sender.CallbackAnswers).Text);
         SentTelegramMessage sent = Assert.Single(harness.Sender.Sent);
         Assert.Contains("Projects:", sent.Text);
-        Assert.Equal(["Use", "➕ Add Project", "Back"], FlattenButtonLabels(sent));
+        Assert.Equal(["repo", "➕ Add Project", "⬅ Back"], FlattenButtonLabels(sent));
     }
 
     [Fact]
@@ -1662,6 +1826,64 @@ public sealed class TelegramCommandHandlerTests
     }
 
     [Fact]
+    public async Task HandleCallbackAsync_SessionsRefreshEditsExistingMessage()
+    {
+        using CommandHandlerHarness harness = CommandHandlerHarness.Create();
+        string projectPath = harness.Temp.CreateDirectory("repo");
+        TelegramConversationScope conversation = new(5555, null);
+        harness.SessionManager.Sessions.Add(CreateSession("thread-1", "Demo session", projectPath, CodexSessionStatus.Exited));
+        await harness.StateStore.TrackSessionAsync("thread-1", CancellationToken.None);
+        await harness.StateStore.SetActiveSessionIdAsync(conversation, "thread-1", CancellationToken.None);
+
+        await harness.Handler.HandleCallbackAsync(
+            new TelegramInboundCallback("callback-sessions-refresh", 1234, conversation.ChatId, "private", "sessions:refresh", SourceMessageId: 141),
+            harness.Sender,
+            CancellationToken.None);
+
+        Assert.Equal("Refreshing.", Assert.Single(harness.Sender.CallbackAnswers).Text);
+        EditedTelegramMessage edited = Assert.Single(harness.Sender.Edited);
+        Assert.Equal(141, edited.MessageId);
+        Assert.Contains("Demo session", edited.Text);
+        Assert.Contains("*", edited.Text);
+        Assert.Equal(["repo", "⛔ Stop", "🗑 Delete", "➕ New Session", "🔄 Refresh", "🛑 Stop AI", "⬅ Back"], FlattenButtonLabels(edited));
+        Assert.Empty(harness.Sender.Sent);
+    }
+
+    [Fact]
+    public async Task HandleCallbackAsync_SessionsRefreshReloadsUpdatedSessionState()
+    {
+        using CommandHandlerHarness harness = CommandHandlerHarness.Create();
+        string projectPath = harness.Temp.CreateDirectory("repo");
+        TelegramConversationScope conversation = new(5555, null);
+        harness.SessionManager.Sessions.Add(CreateSession("thread-1", "Demo session", projectPath, CodexSessionStatus.Exited));
+        await harness.StateStore.TrackSessionAsync("thread-1", CancellationToken.None);
+        await harness.StateStore.SetActiveSessionIdAsync(conversation, "thread-1", CancellationToken.None);
+
+        await harness.Handler.HandleMessageAsync(
+            new TelegramInboundMessage(1234, conversation.ChatId, "private", "/sessions"),
+            harness.Sender,
+            CancellationToken.None);
+
+        harness.Sender.Sent.Clear();
+        harness.SessionManager.Sessions[0] = CreateSession("thread-1", "Demo session", projectPath, CodexSessionStatus.Running);
+        harness.SessionManager.Sessions.Add(CreateSession("thread-2", "Background session", harness.Temp.CreateDirectory("repo-two"), CodexSessionStatus.Exited));
+        await harness.StateStore.TrackSessionAsync("thread-2", CancellationToken.None);
+
+        await harness.Handler.HandleCallbackAsync(
+            new TelegramInboundCallback("callback-sessions-refresh", 1234, conversation.ChatId, "private", "sessions:refresh", SourceMessageId: 142),
+            harness.Sender,
+            CancellationToken.None);
+
+        EditedTelegramMessage edited = Assert.Single(harness.Sender.Edited);
+        Assert.Contains("Demo session", edited.Text);
+        Assert.Contains("running", edited.Text);
+        Assert.Contains("Background session", edited.Text);
+        Assert.Equal(
+            ["repo", "⛔ Stop", "🗑 Delete", "repo-two", "⛔ Stop", "🗑 Delete", "➕ New Session", "🔄 Refresh", "🛑 Stop AI", "⬅ Back"],
+            FlattenButtonLabels(edited));
+    }
+
+    [Fact]
     public async Task HandleCallbackAsync_HelpCategoryAndFullReferenceRespond()
     {
         using CommandHandlerHarness harness = CommandHandlerHarness.Create();
@@ -1705,6 +1927,46 @@ public sealed class TelegramCommandHandlerTests
     }
 
     [Fact]
+    public async Task HandleCallbackAsync_DeleteSessionRequestsConfirmation()
+    {
+        using CommandHandlerHarness harness = CommandHandlerHarness.Create();
+        harness.SessionManager.Sessions.Add(CreateSession("thread-1", "Demo session", "/workspace/demo-repo"));
+
+        await harness.Handler.HandleCallbackAsync(
+            new TelegramInboundCallback("callback-delete", 1234, 5555, "private", "delete:thread-1", SourceMessageId: 141),
+            harness.Sender,
+            CancellationToken.None);
+
+        Assert.Equal("Delete session.", Assert.Single(harness.Sender.CallbackAnswers).Text);
+        EditedTelegramMessage edited = Assert.Single(harness.Sender.Edited);
+        Assert.Contains("Delete Demo session?", edited.Text);
+        Assert.Equal(["🗑 Confirm Delete", "⬅ Back"], FlattenButtonLabels(edited));
+    }
+
+    [Fact]
+    public async Task HandleCallbackAsync_DeleteSessionStopsForgetsAndRefreshesSessionMenu()
+    {
+        using CommandHandlerHarness harness = CommandHandlerHarness.Create();
+        harness.SessionManager.Sessions.Add(CreateSession("thread-1", "Demo session", "/workspace/demo-repo", CodexSessionStatus.Running));
+        harness.SessionManager.Sessions.Add(CreateSession("thread-2", "Second session", "/workspace/other-repo"));
+        await harness.StateStore.TrackSessionAsync("thread-1", CancellationToken.None);
+        await harness.StateStore.TrackSessionAsync("thread-2", CancellationToken.None);
+
+        await harness.Handler.HandleCallbackAsync(
+            new TelegramInboundCallback("callback-delete-confirm", 1234, 5555, "private", "deleteconfirm:thread-1", SourceMessageId: 142),
+            harness.Sender,
+            CancellationToken.None);
+
+        Assert.Equal("Deleting session.", Assert.Single(harness.Sender.CallbackAnswers).Text);
+        Assert.Equal(["thread-1"], harness.SessionManager.StopRequests);
+        Assert.Equal(["thread-1"], harness.SessionManager.ForgetRequests);
+        EditedTelegramMessage edited = Assert.Single(harness.Sender.Edited);
+        Assert.Contains("Deleted Demo session.", edited.Text);
+        Assert.Contains("Second session", edited.Text);
+        Assert.Equal(["other-repo", "⛔ Stop", "🗑 Delete", "➕ New Session", "🔄 Refresh", "🛑 Stop AI", "⬅ Back"], FlattenButtonLabels(edited));
+    }
+
+    [Fact]
     public async Task HandleCallbackAsync_NavigationDevOpensDevMenu()
     {
         using CommandHandlerHarness harness = CommandHandlerHarness.Create();
@@ -1717,7 +1979,26 @@ public sealed class TelegramCommandHandlerTests
         Assert.Equal("Opening menu.", Assert.Single(harness.Sender.CallbackAnswers).Text);
         SentTelegramMessage sent = Assert.Single(harness.Sender.Sent);
         Assert.Contains("Next App Server:", sent.Text);
-        Assert.Equal(["▶ Start", "⛔ Stop", "🔄 Restart", "🌐 Preview", "📜 Logs", "📊 Status", "Back"], FlattenButtonLabels(sent));
+        Assert.Equal(["▶ Start", "⏹ Stop", "📜 Logs", "🌐 Tailscale", "🧹 Kill Dev Ports", "⬅ Back"], FlattenButtonLabels(sent));
+    }
+
+    [Fact]
+    public async Task HandleCallbackAsync_DevKillPortsRunsCleanupAndRefreshesMenu()
+    {
+        using CommandHandlerHarness harness = CommandHandlerHarness.Create();
+
+        await harness.Handler.HandleCallbackAsync(
+            new TelegramInboundCallback("callback-dev-killports", 1234, 5555, "private", "dev:killports", SourceMessageId: 143),
+            harness.Sender,
+            CancellationToken.None);
+
+        Assert.Equal("Dev action.", Assert.Single(harness.Sender.CallbackAnswers).Text);
+        Assert.Equal(1, harness.DevUtilityService.KillDevPortsRequests);
+        EditedTelegramMessage edited = Assert.Single(harness.Sender.Edited);
+        Assert.Contains("🧹 Kill Dev Ports", edited.Text);
+        Assert.Contains("✅ Cleared:", edited.Text);
+        Assert.Contains("ℹ Already free:", edited.Text);
+        Assert.Equal(["▶ Start", "⏹ Stop", "📜 Logs", "🌐 Tailscale", "🧹 Kill Dev Ports", "⬅ Back"], FlattenButtonLabels(edited));
     }
 
     [Fact]
@@ -1725,8 +2006,8 @@ public sealed class TelegramCommandHandlerTests
     {
         using CommandHandlerHarness harness = CommandHandlerHarness.Create();
         harness.TailscaleServeUtilityService.Hostname = "node.tailnet.ts.net";
-        harness.TailscaleServeUtilityService.ConfiguredEntries.Add(new TailscaleServeEntryState("Salonup", 3000, true, "http://localhost:3000", "https://node.tailnet.ts.net:3000"));
-        harness.TailscaleServeUtilityService.ConfiguredEntries.Add(new TailscaleServeEntryState("Admin", 3500, false, "http://localhost:3500", "https://node.tailnet.ts.net:3500"));
+        harness.TailscaleServeUtilityService.ConfiguredEntries.Add(new TailscaleServeEntryState("Salonup", 3000, true, "http://localhost:3000", "https://node.tailnet.ts.net/"));
+        harness.TailscaleServeUtilityService.ConfiguredEntries.Add(new TailscaleServeEntryState("Admin", 3500, false, "http://localhost:3500", "https://node.tailnet.ts.net/"));
 
         await harness.Handler.HandleCallbackAsync(
             new TelegramInboundCallback("callback-ts", 1234, 5555, "private", "nav:tailscale"),
@@ -1738,7 +2019,8 @@ public sealed class TelegramCommandHandlerTests
         Assert.Contains("Tailscale Serve:", sent.Text);
         Assert.Contains("🟢 Salonup (3000)", sent.Text);
         Assert.Contains("🔴 Admin (3500)", sent.Text);
-        Assert.Equal(["Toggle Salonup (3000)", "Toggle Admin (3500)", "Custom Port", "Reset All Serve Routes", "Back"], FlattenButtonLabels(sent));
+        Assert.Contains("ℹ️ Disable turns off the current root Serve route.", sent.Text);
+        Assert.Equal(["🎚️ Salonup (3000)", "🎚️ Admin (3500)", "🔢 Custom Port", "♻️ Reset All Serve Routes", "⬅ Back"], FlattenButtonLabels(sent));
     }
 
     [Fact]
@@ -1755,7 +2037,8 @@ public sealed class TelegramCommandHandlerTests
         Assert.Equal("Tailscale.", Assert.Single(harness.Sender.CallbackAnswers).Text);
         Assert.Equal([3000], harness.TailscaleServeUtilityService.ToggleRequests);
         EditedTelegramMessage edited = Assert.Single(harness.Sender.Edited);
-        Assert.Contains("Enabled Tailscale Serve for port 3000.", edited.Text);
+        Assert.Contains("Enabled Tailscale Serve root route for backend port 3000.", edited.Text);
+        Assert.Contains("Note: disabling an active entry turns off the current root Serve route.", edited.Text);
     }
 
     [Fact]
@@ -2423,6 +2706,7 @@ public sealed class TelegramCommandHandlerTests
             FakeTelegramForumTopicService topicService,
             FakeAudioTranscriptionService audioTranscription,
             FakeDevUtilityService devUtilityService,
+            FakeGitUtilityService gitUtilityService,
             FakeTailscaleServeUtilityService tailscaleServeUtilityService,
             FakeTurnExecutionCoordinator turnCoordinator,
             TestTelegramBotMessageSender sender,
@@ -2440,6 +2724,7 @@ public sealed class TelegramCommandHandlerTests
             TopicService = topicService;
             AudioTranscription = audioTranscription;
             DevUtilityService = devUtilityService;
+            GitUtilityService = gitUtilityService;
             TailscaleServeUtilityService = tailscaleServeUtilityService;
             TurnCoordinator = turnCoordinator;
             Sender = sender;
@@ -2469,6 +2754,8 @@ public sealed class TelegramCommandHandlerTests
         public FakeAudioTranscriptionService AudioTranscription { get; }
 
         public FakeDevUtilityService DevUtilityService { get; }
+
+        public FakeGitUtilityService GitUtilityService { get; }
 
         public FakeTailscaleServeUtilityService TailscaleServeUtilityService { get; }
 
@@ -2501,6 +2788,7 @@ public sealed class TelegramCommandHandlerTests
             FakeTelegramForumTopicService topicService = new();
             FakeAudioTranscriptionService audioTranscription = new();
             FakeDevUtilityService devUtilityService = new();
+            FakeGitUtilityService gitUtilityService = new();
             FakeTailscaleServeUtilityService tailscaleServeUtilityService = new();
             FakeTurnExecutionCoordinator turnCoordinator = new();
             TestTelegramBotMessageSender sender = new();
@@ -2521,6 +2809,7 @@ public sealed class TelegramCommandHandlerTests
                 audioTranscription,
                 outboundQueue,
                 devUtilityService,
+                gitUtilityService,
                 tailscaleServeUtilityService,
                 Microsoft.Extensions.Options.Options.Create(botOptions ?? new TelegramBotOptions
                 {
@@ -2528,7 +2817,7 @@ public sealed class TelegramCommandHandlerTests
                 }),
                 NullLogger<TelegramCodexBotCommandHandler>.Instance);
 
-            return new CommandHandlerHarness(temp, sessionManager, accountUsage, projectCatalog, stateStore, outboundQueue, typingIndicatorRegistry, turnReactionRegistry, debugPreambleMode, topicService, audioTranscription, devUtilityService, tailscaleServeUtilityService, turnCoordinator, sender, handler);
+            return new CommandHandlerHarness(temp, sessionManager, accountUsage, projectCatalog, stateStore, outboundQueue, typingIndicatorRegistry, turnReactionRegistry, debugPreambleMode, topicService, audioTranscription, devUtilityService, gitUtilityService, tailscaleServeUtilityService, turnCoordinator, sender, handler);
         }
 
         public void Dispose()
@@ -2560,6 +2849,8 @@ public sealed class TelegramCommandHandlerTests
         public List<(string SessionId, int LineCount)> TailRequests { get; } = [];
 
         public List<string> StopRequests { get; } = [];
+
+        public List<string> ForgetRequests { get; } = [];
 
         public List<(string SessionId, object Input)> SteerRequests { get; } = [];
 
@@ -2730,6 +3021,7 @@ public sealed class TelegramCommandHandlerTests
 
         public Task ForgetAsync(string sessionId, CancellationToken cancellationToken)
         {
+            ForgetRequests.Add(sessionId);
             Sessions.RemoveAll(session => string.Equals(session.Id, sessionId, StringComparison.OrdinalIgnoreCase));
             return Task.CompletedTask;
         }
@@ -2884,6 +3176,8 @@ public sealed class TelegramCommandHandlerTests
 
         public List<string> PreviewRequests { get; } = [];
 
+        public int KillDevPortsRequests { get; private set; }
+
         public Task<IReadOnlyList<string>> ListRunningProjectDirectoriesAsync(CancellationToken cancellationToken)
             => Task.FromResult<IReadOnlyList<string>>(RunningDirectories.ToArray());
 
@@ -2930,6 +3224,91 @@ public sealed class TelegramCommandHandlerTests
             PreviewRequests.Add(workingDirectory);
             return Task.FromResult($"Preview {Path.GetFileName(workingDirectory)}");
         }
+
+        public Task<string> KillDevPortsAsync(CancellationToken cancellationToken)
+        {
+            KillDevPortsRequests++;
+            return Task.FromResult("🧹 Kill Dev Ports\nChecked ports: 3000, 3001\n\n✅ Cleared:\n* 3500\n\nℹ Already free:\n* 3001");
+        }
+    }
+
+    private sealed class FakeGitUtilityService : IGitUtilityService
+    {
+        public GitRepositoryMenuState MenuState { get; set; } = new("repo", "/workspace/repo", "main", "clean", "origin", "repo", true, false, 0, 0);
+
+        public GitBranchMenuState BranchMenuState { get; set; } = new("repo", "/workspace/repo", "main", false, ["main", "dev"]);
+
+        public List<string> MenuStateRequests { get; } = [];
+
+        public List<string> StatusRequests { get; } = [];
+
+        public List<string> DiffRequests { get; } = [];
+
+        public List<(string WorkingDirectory, string Message)> CommitRequests { get; } = [];
+
+        public List<string> PushRequests { get; } = [];
+
+        public List<string> PullRequests { get; } = [];
+
+        public List<string> BranchMenuRequests { get; } = [];
+
+        public List<(string WorkingDirectory, string BranchName)> CheckoutRequests { get; } = [];
+
+        public GitActionResult CommitResult { get; set; } = new(true, "✅ Commit completed.");
+
+        public GitActionResult PushResult { get; set; } = new(true, "Push completed.");
+
+        public GitActionResult PullResult { get; set; } = new(true, "Pull completed.");
+
+        public GitActionResult CheckoutResult { get; set; } = new(true, "🌿 Checked out branch.");
+
+        public Task<GitRepositoryMenuState> GetMenuStateAsync(string workingDirectory, CancellationToken cancellationToken)
+        {
+            MenuStateRequests.Add(workingDirectory);
+            return Task.FromResult(MenuState with { WorkingDirectory = workingDirectory, ProjectName = Path.GetFileName(workingDirectory) });
+        }
+
+        public Task<string> GetStatusAsync(string workingDirectory, CancellationToken cancellationToken)
+        {
+            StatusRequests.Add(workingDirectory);
+            return Task.FromResult($"Git status for {Path.GetFileName(workingDirectory)}");
+        }
+
+        public Task<string> GetDiffSummaryAsync(string workingDirectory, CancellationToken cancellationToken)
+        {
+            DiffRequests.Add(workingDirectory);
+            return Task.FromResult($"Git diff for {Path.GetFileName(workingDirectory)}");
+        }
+
+        public Task<GitActionResult> CommitAsync(string workingDirectory, string message, CancellationToken cancellationToken)
+        {
+            CommitRequests.Add((workingDirectory, message));
+            return Task.FromResult(CommitResult);
+        }
+
+        public Task<GitActionResult> PushAsync(string workingDirectory, CancellationToken cancellationToken)
+        {
+            PushRequests.Add(workingDirectory);
+            return Task.FromResult(PushResult);
+        }
+
+        public Task<GitActionResult> PullAsync(string workingDirectory, CancellationToken cancellationToken)
+        {
+            PullRequests.Add(workingDirectory);
+            return Task.FromResult(PullResult);
+        }
+
+        public Task<GitBranchMenuState> GetBranchMenuStateAsync(string workingDirectory, CancellationToken cancellationToken)
+        {
+            BranchMenuRequests.Add(workingDirectory);
+            return Task.FromResult(BranchMenuState with { WorkingDirectory = workingDirectory, ProjectName = Path.GetFileName(workingDirectory) });
+        }
+
+        public Task<GitActionResult> CheckoutBranchAsync(string workingDirectory, string branchName, CancellationToken cancellationToken)
+        {
+            CheckoutRequests.Add((workingDirectory, branchName));
+            return Task.FromResult(CheckoutResult);
+        }
     }
 
     private sealed class FakeTailscaleServeUtilityService : ITailscaleServeUtilityService
@@ -2968,21 +3347,21 @@ public sealed class TelegramCommandHandlerTests
                 ConfiguredEntries[index] = current with
                 {
                     Enabled = enabled,
-                    TailscaleUrl = Hostname is null ? null : $"https://{Hostname}:{port}"
+                    TailscaleUrl = Hostname is null ? null : $"https://{Hostname}/"
                 };
             }
             else
             {
                 enabled = true;
-                ConfiguredEntries.Add(new TailscaleServeEntryState(port.ToString(CultureInfo.InvariantCulture), port, true, $"http://localhost:{port}", Hostname is null ? null : $"https://{Hostname}:{port}"));
+                ConfiguredEntries.Add(new TailscaleServeEntryState(port.ToString(CultureInfo.InvariantCulture), port, true, $"http://localhost:{port}", Hostname is null ? null : $"https://{Hostname}/"));
             }
 
             return Task.FromResult(new TailscaleServeToggleResult(
                 enabled,
                 port,
-                enabled ? $"Enabled Tailscale Serve for port {port}." : $"Disabled Tailscale Serve for port {port}.",
+                enabled ? $"Enabled Tailscale Serve root route for backend port {port}." : $"Disabled the current Tailscale Serve root route for backend port {port}.",
                 $"http://localhost:{port}",
-                Hostname is null ? null : $"https://{Hostname}:{port}"));
+                Hostname is null ? null : $"https://{Hostname}/"));
         }
 
         public Task<TailscaleServeResetResult> ResetAsync(CancellationToken cancellationToken)

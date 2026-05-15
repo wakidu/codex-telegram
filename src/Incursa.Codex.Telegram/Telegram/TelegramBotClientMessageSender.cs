@@ -124,6 +124,7 @@ internal sealed class TelegramBotClientMessageSender : ITelegramBotMessageSender
     async Task IOutboundTelegramMessageSender.SendTextMessageAsync(
         TelegramConversationScope conversation,
         string text,
+        IReadOnlyList<IReadOnlyList<TelegramReplyButton>>? buttons,
         CancellationToken cancellationToken,
         TelegramDebugMessageContext? debugContext)
     {
@@ -134,7 +135,7 @@ internal sealed class TelegramBotClientMessageSender : ITelegramBotMessageSender
 
         try
         {
-            await SendMessageAsync(conversation, text, null, cancellationToken, debugContext).ConfigureAwait(false);
+            await SendMessageAsync(conversation, text, buttons, cancellationToken, debugContext).ConfigureAwait(false);
         }
         catch (ApiRequestException exception) when (IsRateLimited(exception))
         {

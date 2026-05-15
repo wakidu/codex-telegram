@@ -1,5 +1,6 @@
 using Incursa.Codex.Telegram.Models;
 using Incursa.Codex.Telegram.Options;
+using Incursa.Codex.Telegram.Services;
 using Incursa.Codex.Telegram.Telegram;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -416,8 +417,9 @@ public sealed class TelegramTurnOutputRelayTests
             CreateEntry(type: "turn.completed", title: "Turn completed", body: "hello world.\nremaining", severity: "success"),
             CancellationToken.None);
 
+        AssertPostTurnMenu(queue.Messages);
         Assert.Collection(
-            queue.Messages,
+            GetNonMenuMessages(queue.Messages),
             message =>
             {
                 Assert.Equal(CodexOutboundMessageKind.Update, message.Kind);
@@ -476,7 +478,8 @@ public sealed class TelegramTurnOutputRelayTests
             CreateEntry(type: "turn.completed", title: "Turn completed", body: "all done.", severity: "success"),
             CancellationToken.None);
 
-        Assert.Equal("all done.", Assert.Single(queue.Messages).Text);
+        AssertPostTurnMenu(queue.Messages);
+        Assert.Equal("all done.", Assert.Single(GetNonMenuMessages(queue.Messages)).Text);
     }
 
     [Fact]
@@ -497,8 +500,9 @@ public sealed class TelegramTurnOutputRelayTests
             CreateEntry(type: "turn.completed", title: "Turn completed", body: null, severity: "success"),
             CancellationToken.None);
 
+        AssertPostTurnMenu(queue.Messages);
         Assert.Collection(
-            queue.Messages,
+            GetNonMenuMessages(queue.Messages),
             message => Assert.Equal("short final", message.Text),
             message => Assert.Equal("~~ fin ~~", message.Text));
     }
@@ -514,8 +518,9 @@ public sealed class TelegramTurnOutputRelayTests
             CreateEntry(type: "turn.completed", title: "Turn completed", body: "Finished already" + Environment.NewLine + Environment.NewLine + "~~ fin ~~", severity: "success"),
             CancellationToken.None);
 
+        AssertPostTurnMenu(queue.Messages);
         Assert.Collection(
-            queue.Messages,
+            GetNonMenuMessages(queue.Messages),
             message => Assert.Equal("Finished already", message.Text),
             message => Assert.Equal("~~ fin ~~", message.Text));
     }
@@ -531,7 +536,77 @@ public sealed class TelegramTurnOutputRelayTests
             CreateEntry(type: "turn.completed", title: "Turn completed", body: null, severity: "success"),
             CancellationToken.None);
 
-        Assert.Equal("~~ fin ~~", Assert.Single(queue.Messages).Text);
+        AssertPostTurnMenu(queue.Messages);
+        Assert.Equal("~~ fin ~~", Assert.Single(GetNonMenuMessages(queue.Messages)).Text);
+    }
+
+    [Fact]
+    public async Task PublishTurnEventAsync_CompletedTurnQueuesPostTurnActionMenuOnce()
+    {
+        FakeOutboundTelegramQueue queue = new();
+        TelegramThreadFollowRegistry followRegistry = FollowThread();
+        FakeThreadManifestStore manifestStore = new("/workspace/repo");
+        FakeGitUtilityService gitUtilityService = new(new GitRepositoryMenuState("repo", "/workspace/repo", "main", "1 modified", "origin", "repo", false, false, 0, 0));
+        FakeDevUtilityService devUtilityService = new(["/workspace/repo"]);
+        TelegramTurnOutputRelay relay = CreateRelay(queue, followRegistry, manifestStore: manifestStore, gitUtilityService: gitUtilityService, devUtilityService: devUtilityService);
+
+        await relay.PublishTurnEventAsync(
+            CreateEntry(type: "turn.completed", title: "Turn completed", body: "all done", severity: "success"),
+            CancellationToken.None);
+
+        OutboundTelegramMessage menu = AssertPostTurnMenu(queue.Messages);
+        Assert.Equal("✅ Finished", menu.Text);
+        Assert.Equal(
+            ["🌿 Git", "📄 Diff", "✅ Commit", "⬆️ Push", "🚀 Next App Server", "🌐 Tailscale", "📜 Logs", "📋 Menu"],
+            FlattenButtonLabels(menu));
+        Assert.Equal(
+            ["nav:git", "git:diff", "git:commit", "git:push", "nav:dev", "nav:tailscale", "dev:logs", "nav:menu"],
+            FlattenButtonCallbacks(menu));
+    }
+
+    [Fact]
+    public async Task PublishTurnEventAsync_DoesNotQueuePostTurnActionMenuDuringStreamingChunks()
+    {
+        FakeOutboundTelegramQueue queue = new();
+        TelegramThreadFollowRegistry followRegistry = FollowThread();
+        TelegramTurnOutputRelay relay = CreateRelay(queue, followRegistry);
+
+        await relay.PublishTurnEventAsync(
+            CreateEntry(type: "item.agentMessage.delta", title: "Agent", body: "streaming text"),
+            CancellationToken.None);
+
+        Assert.DoesNotContain(queue.Messages, message => message.Buttons is not null);
+    }
+
+    [Fact]
+    public void BuildCompletedTurnMenu_RendersMenuFromLightweightContext()
+    {
+        TelegramPostTurnActionMenu menu = TelegramPostTurnActionMenuFactory.BuildCompletedTurnMenu(
+            new TelegramPostTurnActionMenuContext(
+                "/workspace/repo",
+                HasGitRepository: true,
+                HasGitChanges: true,
+                CanPush: true,
+                IsDevServerRunning: true));
+
+        Assert.Equal("✅ Finished", menu.Text);
+        Assert.Equal(
+            ["🌿 Git", "📄 Diff", "✅ Commit", "⬆️ Push", "🚀 Next App Server", "🌐 Tailscale", "📜 Logs", "📋 Menu"],
+            menu.Buttons.SelectMany(row => row.Select(button => button.Text)).ToArray());
+    }
+
+    [Fact]
+    public async Task PublishTurnEventAsync_DoesNotQueuePostTurnActionMenuForUtilityUpdates()
+    {
+        FakeOutboundTelegramQueue queue = new();
+        TelegramThreadFollowRegistry followRegistry = FollowThread();
+        TelegramTurnOutputRelay relay = CreateRelay(queue, followRegistry);
+
+        await relay.PublishTurnEventAsync(
+            CreateEntry(type: "item.tool_output", title: "Tool output", body: "Tests passed."),
+            CancellationToken.None);
+
+        Assert.DoesNotContain(queue.Messages, message => message.Buttons is not null);
     }
 
     [Fact]
@@ -686,14 +761,37 @@ public sealed class TelegramTurnOutputRelayTests
         TelegramThreadFollowRegistry followRegistry,
         TelegramOutboundOptions? options = null,
         ITelegramTurnReactionRegistry? reactionRegistry = null,
-        TestTelegramBotMessageSender? messageSender = null)
+        TestTelegramBotMessageSender? messageSender = null,
+        FakeThreadManifestStore? manifestStore = null,
+        FakeGitUtilityService? gitUtilityService = null,
+        FakeDevUtilityService? devUtilityService = null)
         => new(
             queue,
             followRegistry,
             reactionRegistry ?? new TelegramTurnReactionRegistry(),
             messageSender ?? new TestTelegramBotMessageSender(),
+            manifestStore ?? new FakeThreadManifestStore(null),
+            gitUtilityService ?? new FakeGitUtilityService(new GitRepositoryMenuState("repo", "/workspace/repo", "main", "clean", "origin", "repo", true, false, 0, 0)),
+            devUtilityService ?? new FakeDevUtilityService([]),
             Microsoft.Extensions.Options.Options.Create(options ?? new TelegramOutboundOptions()),
             NullLogger<TelegramTurnOutputRelay>.Instance);
+
+    private static IReadOnlyList<OutboundTelegramMessage> GetNonMenuMessages(IReadOnlyList<OutboundTelegramMessage> messages)
+        => messages.Where(message => message.Buttons is null).ToArray();
+
+    private static OutboundTelegramMessage AssertPostTurnMenu(IReadOnlyList<OutboundTelegramMessage> messages)
+    {
+        OutboundTelegramMessage menu = Assert.Single(messages, message => message.Buttons is not null);
+        Assert.Equal(CodexOutboundMessageKind.System, menu.Kind);
+        Assert.Equal(OutboundPriority.High, menu.Priority);
+        return menu;
+    }
+
+    private static IReadOnlyList<string> FlattenButtonLabels(OutboundTelegramMessage message)
+        => message.Buttons?.SelectMany(row => row.Select(button => button.Text)).ToArray() ?? [];
+
+    private static IReadOnlyList<string> FlattenButtonCallbacks(OutboundTelegramMessage message)
+        => message.Buttons?.SelectMany(row => row.Select(button => button.CallbackData)).ToArray() ?? [];
 
     private static TelegramThreadFollowRegistry FollowThread()
     {
@@ -743,6 +841,87 @@ public sealed class TelegramTurnOutputRelayTests
 
         public Task<TelegramOutboundQueueStatus> GetStatusAsync(CancellationToken cancellationToken)
             => Task.FromResult(new TelegramOutboundQueueStatus(0, 0, 0, 0, null, null, null, []));
+    }
+
+    private sealed class FakeThreadManifestStore(string? workingDirectory) : ICodexThreadManifestStore
+    {
+        public Task<CodexThreadManifestRecord?> ReadAsync(string threadId, CancellationToken cancellationToken)
+            => Task.FromResult<CodexThreadManifestRecord?>(workingDirectory is null
+                ? null
+                : new CodexThreadManifestRecord
+                {
+                    ThreadId = threadId,
+                    WorkingDirectory = workingDirectory,
+                });
+
+        public Task<CodexThreadManifestRecord> GetOrCreateAsync(string threadId, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<CodexThreadManifestRecord> SetContextAsync(string threadId, CodexThreadContextSubmission submission, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<CodexThreadManifestRecord> SetSelectedFilesAsync(string threadId, IReadOnlyCollection<string> selectedFileIds, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<CodexThreadManifestRecord> UpdateAsync(string threadId, Func<CodexThreadManifestRecord, CodexThreadManifestRecord> updater, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+    }
+
+    private sealed class FakeGitUtilityService(GitRepositoryMenuState menuState) : IGitUtilityService
+    {
+        public Task<GitRepositoryMenuState> GetMenuStateAsync(string workingDirectory, CancellationToken cancellationToken)
+            => Task.FromResult(menuState with { WorkingDirectory = workingDirectory });
+
+        public Task<string> GetStatusAsync(string workingDirectory, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<string> GetDiffSummaryAsync(string workingDirectory, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<GitActionResult> CommitAsync(string workingDirectory, string message, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<GitActionResult> PushAsync(string workingDirectory, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<GitActionResult> PullAsync(string workingDirectory, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<GitBranchMenuState> GetBranchMenuStateAsync(string workingDirectory, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<GitActionResult> CheckoutBranchAsync(string workingDirectory, string branchName, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+    }
+
+    private sealed class FakeDevUtilityService(IReadOnlyList<string> runningDirectories) : IDevUtilityService
+    {
+        public Task<IReadOnlyList<string>> ListRunningProjectDirectoriesAsync(CancellationToken cancellationToken)
+            => Task.FromResult(runningDirectories);
+
+        public Task<DevTargetDescriptor> DescribeTargetAsync(string workingDirectory, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<string> StartAsync(string workingDirectory, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<string> StopAsync(string workingDirectory, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<string> RestartAsync(string workingDirectory, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<string> GetStatusAsync(string workingDirectory, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<string> GetLogsAsync(string workingDirectory, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<string> GetPreviewAsync(string workingDirectory, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<string> KillDevPortsAsync(CancellationToken cancellationToken)
+            => throw new NotSupportedException();
     }
 
     private sealed class TestTelegramBotMessageSender : ITelegramBotMessageSender
