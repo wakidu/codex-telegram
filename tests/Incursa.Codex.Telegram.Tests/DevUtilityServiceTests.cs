@@ -98,7 +98,7 @@ public sealed class DevUtilityServiceTests
     [Fact]
     public void GetKillDevPorts_ReturnsExpectedFixedPorts()
     {
-        Assert.Equal([3000, 3001, 3002, 3003, 3004, 3005, 3100, 3500, 4000], DevUtilityService.GetKillDevPorts());
+        Assert.Equal([3000, 3001, 3002, 3003, 3004, 3005, 3100, 3300, 3500, 4000], DevUtilityService.GetKillDevPorts());
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public sealed class DevUtilityServiceTests
     public void BuildKillDevPortsReport_ListsClearedAndAlreadyFreePorts()
     {
         string report = DevUtilityService.BuildKillDevPortsReport(
-            [3000, 3001, 3500, 4000],
+            [3000, 3001, 3300, 3500, 4000],
             new Dictionary<int, IReadOnlyList<int>>
             {
                 [3000] = [1001],
@@ -127,7 +127,7 @@ public sealed class DevUtilityServiceTests
             [3001, 4000]);
 
         Assert.Contains("🧹 Kill Dev Ports", report);
-        Assert.Contains("Checked ports: 3000, 3001, 3500, 4000", report);
+        Assert.Contains("Checked ports: 3000, 3001, 3300, 3500, 4000", report);
         Assert.Contains("🔎 Detected PIDs:", report);
         Assert.Contains("* 3000: 1001", report);
         Assert.Contains("* 3500: 2001, 2002", report);

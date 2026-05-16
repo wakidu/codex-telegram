@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-PORTS=(3000 3001 3002 3003 3004 3005 3100 3500 4000)
+PORTS=(3000 3001 3002 3003 3004 3005 3100 3300 3500 4000)
 
 for port in "${PORTS[@]}"; do
   pids=$(sudo -n ss -lptn 2>/dev/null \

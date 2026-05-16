@@ -39,7 +39,7 @@ internal sealed record DevTargetDescriptor(
 
 internal sealed class DevUtilityService : IDevUtilityService
 {
-    private static readonly int[] KillDevPorts = [3000, 3001, 3002, 3003, 3004, 3005, 3100, 3500, 4000];
+    private static readonly int[] KillDevPorts = [3000, 3001, 3002, 3003, 3004, 3005, 3100, 3300, 3500, 4000];
     private static readonly HashSet<string> SafeDevProcessNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "node",
@@ -1077,7 +1077,7 @@ internal sealed class DevUtilityService : IDevUtilityService
             }
         }
 
-        foreach (int commonPort in new[] { 3000, 3001, 3100, 3500, 4000, 5173, 5177 })
+        foreach (int commonPort in new[] { 3000, 3001, 3100, 3300, 3500, 4000, 5173, 5177 })
         {
             ports.Add(commonPort);
         }
