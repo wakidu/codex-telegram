@@ -1650,8 +1650,8 @@ public sealed class TelegramCommandHandlerTests
             CancellationToken.None);
 
         SentTelegramMessage sent = Assert.Single(harness.Sender.Sent);
-        Assert.Contains("Restart is managed outside this standalone process.", sent.Text);
-        Assert.Contains("service manager", sent.Text);
+        Assert.Contains("Bot restart is currently disabled.", sent.Text);
+        Assert.Equal(0, harness.ApplicationRestartService.Requests);
     }
 
     [Fact]
@@ -2706,6 +2706,7 @@ public sealed class TelegramCommandHandlerTests
             FakeTelegramForumTopicService topicService,
             FakeAudioTranscriptionService audioTranscription,
             FakeDevUtilityService devUtilityService,
+            FakeApplicationRestartService applicationRestartService,
             FakeGitUtilityService gitUtilityService,
             FakeTailscaleServeUtilityService tailscaleServeUtilityService,
             FakeTurnExecutionCoordinator turnCoordinator,
@@ -2724,6 +2725,7 @@ public sealed class TelegramCommandHandlerTests
             TopicService = topicService;
             AudioTranscription = audioTranscription;
             DevUtilityService = devUtilityService;
+            ApplicationRestartService = applicationRestartService;
             GitUtilityService = gitUtilityService;
             TailscaleServeUtilityService = tailscaleServeUtilityService;
             TurnCoordinator = turnCoordinator;
@@ -2754,6 +2756,8 @@ public sealed class TelegramCommandHandlerTests
         public FakeAudioTranscriptionService AudioTranscription { get; }
 
         public FakeDevUtilityService DevUtilityService { get; }
+
+        public FakeApplicationRestartService ApplicationRestartService { get; }
 
         public FakeGitUtilityService GitUtilityService { get; }
 
@@ -2788,6 +2792,7 @@ public sealed class TelegramCommandHandlerTests
             FakeTelegramForumTopicService topicService = new();
             FakeAudioTranscriptionService audioTranscription = new();
             FakeDevUtilityService devUtilityService = new();
+            FakeApplicationRestartService applicationRestartService = new();
             FakeGitUtilityService gitUtilityService = new();
             FakeTailscaleServeUtilityService tailscaleServeUtilityService = new();
             FakeTurnExecutionCoordinator turnCoordinator = new();
@@ -2809,6 +2814,7 @@ public sealed class TelegramCommandHandlerTests
                 audioTranscription,
                 outboundQueue,
                 devUtilityService,
+                applicationRestartService,
                 gitUtilityService,
                 tailscaleServeUtilityService,
                 Microsoft.Extensions.Options.Options.Create(botOptions ?? new TelegramBotOptions
@@ -2817,7 +2823,7 @@ public sealed class TelegramCommandHandlerTests
                 }),
                 NullLogger<TelegramCodexBotCommandHandler>.Instance);
 
-            return new CommandHandlerHarness(temp, sessionManager, accountUsage, projectCatalog, stateStore, outboundQueue, typingIndicatorRegistry, turnReactionRegistry, debugPreambleMode, topicService, audioTranscription, devUtilityService, gitUtilityService, tailscaleServeUtilityService, turnCoordinator, sender, handler);
+            return new CommandHandlerHarness(temp, sessionManager, accountUsage, projectCatalog, stateStore, outboundQueue, typingIndicatorRegistry, turnReactionRegistry, debugPreambleMode, topicService, audioTranscription, devUtilityService, applicationRestartService, gitUtilityService, tailscaleServeUtilityService, turnCoordinator, sender, handler);
         }
 
         public void Dispose()
@@ -3229,6 +3235,17 @@ public sealed class TelegramCommandHandlerTests
         {
             KillDevPortsRequests++;
             return Task.FromResult("🧹 Kill Dev Ports\nChecked ports: 3000, 3001\n\n✅ Cleared:\n* 3500\n\nℹ Already free:\n* 3001");
+        }
+    }
+
+    private sealed class FakeApplicationRestartService : IApplicationRestartService
+    {
+        public int Requests { get; private set; }
+
+        public Task RequestRestartAsync(CancellationToken cancellationToken)
+        {
+            Requests++;
+            return Task.CompletedTask;
         }
     }
 

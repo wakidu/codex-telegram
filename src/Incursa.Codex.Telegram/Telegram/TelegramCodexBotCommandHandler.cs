@@ -112,6 +112,7 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
     private readonly IAudioTranscriptionService _audioTranscriptionService;
     private readonly IOutboundTelegramQueue _outboundQueue;
     private readonly IDevUtilityService _devUtilityService;
+    private readonly IApplicationRestartService _applicationRestartService;
     private readonly IGitUtilityService _gitUtilityService;
     private readonly ITailscaleServeUtilityService _tailscaleServeUtilityService;
     private readonly TelegramBotOptions _options;
@@ -138,6 +139,7 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
         IAudioTranscriptionService audioTranscriptionService,
         IOutboundTelegramQueue outboundQueue,
         IDevUtilityService devUtilityService,
+        IApplicationRestartService applicationRestartService,
         IGitUtilityService gitUtilityService,
         ITailscaleServeUtilityService tailscaleServeUtilityService,
         IOptions<TelegramBotOptions> options,
@@ -159,6 +161,7 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
         _audioTranscriptionService = audioTranscriptionService;
         _outboundQueue = outboundQueue;
         _devUtilityService = devUtilityService;
+        _applicationRestartService = applicationRestartService;
         _gitUtilityService = gitUtilityService;
         _tailscaleServeUtilityService = tailscaleServeUtilityService;
         _options = options.Value;
@@ -1385,6 +1388,10 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
                 return;
             case "killports":
                 await HandleDevKillPortsAsync(message, sender, cancellationToken).ConfigureAwait(false);
+                return;
+            case "botrestart":
+            case "botrestartconfirm":
+                await ReplyAsync(sender, message, "Bot restart is currently disabled.", BuildDevMenuButtons(), cancellationToken, includeNavigationButtons: false).ConfigureAwait(false);
                 return;
         }
 
@@ -3156,7 +3163,7 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
         await ReplyAsync(
             sender,
             message,
-            "Restart is managed outside this standalone process. Stop the terminal process and start Incursa.Codex.Telegram again, or run it under a service manager that restarts on exit.",
+            "Bot restart is currently disabled.",
             null,
             cancellationToken).ConfigureAwait(false);
     }
@@ -4187,6 +4194,7 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
                 "/debug [status|on|off|reset] - diagnostic message preambles",
                 "/outbound - show outbound Telegram queue status",
                 "/stop [sessionId] - gracefully stop a session",
+                "/restart confirm - restart this bot process via restart.sh",
                 "/kill <sessionId> confirm - hard-stop a session",
                 "/rename <sessionId> <new name> - rename a session",
                 "/forget <sessionId> - hide a stopped/exited session"
@@ -4274,7 +4282,7 @@ internal sealed class TelegramCodexBotCommandHandler : ITelegramCodexBotUpdateHa
             "/debug [status|on|off|reset] - show or change diagnostic message preambles",
             "/outbound - show outbound Telegram queue status",
             "/stop [sessionId] - gracefully stop a session",
-            "/restart confirm - explain how to restart this standalone process",
+            "/restart confirm - restart this bot process via restart.sh",
             "/kill <sessionId> confirm - hard-stop a session",
             "/rename <sessionId> <new name> - rename a session",
             "/forget <sessionId> - hide a stopped/exited session without deleting logs",
